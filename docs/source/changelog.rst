@@ -8,6 +8,10 @@ Upcoming version (not yet released)
 Added
 ^^^^^
 
+- Added ``CameraSensorCfg.fps`` to run a camera slower than the control loop. The
+  sensor surfaces a new frame every ``1 / fps`` seconds of simulated time and holds the
+  previous one in between, with a random per-environment phase and a fresh frame for
+  reset environments. Rendering cost is unchanged.
 - Added ``SimulationCfg.graph_conditional`` to toggle MuJoCo Warp's CUDA graph
   conditional nodes, which require CUDA 12.4 or newer.
 

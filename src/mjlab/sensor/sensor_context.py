@@ -119,11 +119,12 @@ class SensorContext:
     """Post-graph: compute raycast hit positions."""
     for sensor in self.raycast_sensors:
       sensor.postprocess_rays()
-    # Fresh render results: drop camera data cached by a pre-sense read so
-    # observations serve this step's frames (mirrors the raycast
-    # invalidation in postprocess_rays).
+    # Fresh render results: let each camera take the new frame (or hold its
+    # previous one, depending on its frame rate) and drop data cached by a
+    # pre-sense read so observations serve this step's output (mirrors the
+    # raycast invalidation in postprocess_rays).
     for sensor in self.camera_sensors:
-      sensor._invalidate_cache()
+      sensor.capture()
 
   def get_rgb(self, cam_idx: int) -> torch.Tensor:
     """Get unpacked RGB data for a camera.

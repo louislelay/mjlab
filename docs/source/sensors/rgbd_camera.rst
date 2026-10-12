@@ -156,6 +156,41 @@ Only requested types are allocated; the other field on
        MuJoCo object types. Background pixels are ``(-1, -1)``.
 
 
+Frame rate
+----------
+
+Real cameras are often slower than the control loop. Set ``fps`` to
+have the sensor surface a new frame only every ``1 / fps`` seconds of
+simulated time and hold the previous one in between. All data types of
+the camera refresh together, so RGB, depth, and segmentation always
+come from the same instant. Each environment starts with a random
+phase so refreshes are staggered across environments, and reset
+environments receive a fresh frame on their first step.
+
+.. code-block:: python
+
+    # 25 fps wrist camera on a 50 Hz policy: a new frame every other step.
+    CameraSensorCfg(
+        name="wrist_cam",
+        camera_name="robot/wrist_camera",
+        data_types=("rgb", "depth"),
+        width=32,
+        height=32,
+        fps=25.0,
+    )
+
+Combine with the observation term's ``delay_min_lag`` / ``delay_max_lag``
+to also model the latency between capture and arrival at the policy.
+Rates at or above the control rate behave like the default (a fresh
+frame every step), and the effective rate is quantized to control
+steps.
+
+.. note::
+
+   ``fps`` does not reduce rendering cost. Frames are still rendered
+   every step; the ones between refreshes are simply not surfaced.
+
+
 Render settings
 ---------------
 

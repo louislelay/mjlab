@@ -87,6 +87,26 @@ class CameraSensorCfg(SensorCfg):
   orthographic: bool = False
   """Use orthographic projection instead of perspective."""
 
+  fps: float | None = None
+  """Camera frame rate in Hz.
+
+  If None, a new frame is surfaced every time the scene is sensed (once per
+  control step). If set, the sensor refreshes its output only once every
+  ``1 / fps`` seconds of simulated time and holds the last frame in between,
+  like a real camera that is slower than the control loop. All data types of
+  the camera refresh together so they always come from the same instant.
+
+  Each environment starts with a random phase so frames do not refresh in
+  lockstep across environments. Reset environments receive a fresh frame on
+  the next sense. Rates at or above the control rate produce a fresh frame
+  every step, i.e. behave like None. The effective rate is quantized to
+  control steps.
+
+  Note:
+    This does not reduce rendering cost. Frames are still rendered every
+    step; the ones between refreshes are simply not surfaced.
+  """
+
   clone_data: bool = False
   """If True, clone tensors on each access.
 
@@ -100,6 +120,8 @@ class CameraSensorCfg(SensorCfg):
       raise ValueError(f"Invalid camera data types: {invalid}. Valid types: {valid}")
     if not self.data_types:
       raise ValueError("At least one data type must be specified.")
+    if self.fps is not None and self.fps <= 0:
+      raise ValueError(f"fps must be positive, got {self.fps}.")
 
   def build(self) -> CameraSensor:
     return CameraSensor(self)
@@ -131,6 +153,18 @@ class CameraSensorData:
   """
 
 
+_HELD_SHAPES: dict[CameraDataType, tuple[int, torch.dtype]] = {
+  "rgb": (3, torch.uint8),
+  "depth": (1, torch.float32),
+  "segmentation": (2, torch.int32),
+}
+"""Trailing channel count and dtype of each camera data type."""
+
+# Tolerance when comparing accumulated simulated time against the frame period,
+# so float accumulation error never skips a frame that is due.
+_FRAME_TIME_EPS = 1e-6
+
+
 class CameraSensor(Sensor[CameraSensorData]):
   """Camera sensor for RGB and depth rendering."""
 
@@ -143,6 +177,11 @@ class CameraSensor(Sensor[CameraSensorData]):
     self._is_wrapping_existing = cfg.camera_name is not None
     self._ctx: SensorContext | None = None
     self._camera_idx: int = -1
+    # Frame-rate state. Only used when ``cfg.fps`` is set.
+    self._period: float | None = None if cfg.fps is None else 1.0 / cfg.fps
+    self._pending_dt: float = 0.0
+    self._elapsed: torch.Tensor | None = None
+    self._held: dict[CameraDataType, torch.Tensor] = {}
 
   @property
   def camera_name(self) -> str:
@@ -151,6 +190,11 @@ class CameraSensor(Sensor[CameraSensorData]):
   @property
   def camera_idx(self) -> int:
     return self._camera_idx
+
+  @property
+  def frame_period(self) -> float | None:
+    """Seconds between surfaced frames, or None when every sense is surfaced."""
+    return self._period
 
   def edit_spec(
     self,
@@ -194,7 +238,7 @@ class CameraSensor(Sensor[CameraSensorData]):
     data: mjwarp.Data,
     device: str,
   ) -> None:
-    del model, data, device
+    del model
 
     try:
       cam = mj_model.camera(self._camera_name)
@@ -205,26 +249,100 @@ class CameraSensor(Sensor[CameraSensorData]):
         f"Camera '{self._camera_name}' not found in model. Available: {available}"
       ) from e
 
+    if self._period is None:
+      return
+    nworld = data.nworld
+    self._elapsed = torch.zeros(nworld, dtype=torch.float64, device=device)
+    self._arm(slice(None))
+    self._held = {
+      data_type: torch.zeros(
+        (nworld, self.cfg.height, self.cfg.width, channels),
+        dtype=dtype,
+        device=device,
+      )
+      for data_type, (channels, dtype) in _HELD_SHAPES.items()
+      if data_type in self.cfg.data_types
+    }
+
   def set_context(self, ctx: SensorContext) -> None:
     self._ctx = ctx
 
-  def _compute_data(self) -> CameraSensorData:
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    super().reset(env_ids)
+    if self._elapsed is None:
+      return
+    if env_ids is None:
+      env_ids = slice(None)
+    self._arm(env_ids)
+
+  def _arm(self, env_ids: torch.Tensor | slice) -> None:
+    """Make ``env_ids`` due on the next sense with a fresh random phase after.
+
+    Used at initialization and on reset so an env never starts an episode
+    holding a stale frame, while refreshes stay staggered across envs.
+    """
+    assert self._elapsed is not None and self._period is not None
+    n = self._elapsed[env_ids].shape[0]
+    phase = torch.rand(n, dtype=torch.float64, device=self._elapsed.device)
+    self._elapsed[env_ids] = (1.0 + phase) * self._period
+
+  def update(self, dt: float) -> None:
+    super().update(dt)
+    self._pending_dt += dt
+
+  def capture(self) -> None:
+    """Take the freshly rendered frame into the surfaced output.
+
+    Called by :class:`SensorContext` after every render. Without ``fps`` this
+    only invalidates the cache so reads see the new render. With ``fps`` it
+    copies the render into the held frame for environments whose frame period
+    has elapsed and leaves the others untouched.
+    """
+    self._invalidate_cache()
+    if self._elapsed is None:
+      return
+    assert self._period is not None
+    self._elapsed += self._pending_dt
+    self._pending_dt = 0.0
+    due = self._elapsed >= self._period - _FRAME_TIME_EPS
+    # Keep the sub-period remainder so each env's phase is preserved. Subtract
+    # the period before taking the remainder so a clock within the tolerance
+    # just below the period is consumed rather than left due again.
+    remainder = torch.remainder(
+      torch.clamp(self._elapsed - self._period, min=0.0), self._period
+    )
+    self._elapsed = torch.where(due, remainder, self._elapsed)
+    due_mask = due.view(-1, 1, 1, 1)
+    for data_type, held in self._held.items():
+      fresh = self._render_output(data_type)
+      held.copy_(torch.where(due_mask, fresh, held))
+
+  def _render_output(self, data_type: CameraDataType) -> torch.Tensor:
+    """View of the latest render for ``data_type`` (zero-copy)."""
     if self._ctx is None:
       raise RuntimeError(
         "CameraSensor requires a SensorContext. "
         "Ensure the sensor is part of a scene with "
         "sim.sense() calls."
       )
-    rgb_data = None
-    depth_data = None
-    seg_data = None
-    if "rgb" in self.cfg.data_types:
-      rgb = self._ctx.get_rgb(self._camera_idx)
-      rgb_data = rgb.clone() if self.cfg.clone_data else rgb
-    if "depth" in self.cfg.data_types:
-      depth = self._ctx.get_depth(self._camera_idx)
-      depth_data = depth.clone() if self.cfg.clone_data else depth
-    if "segmentation" in self.cfg.data_types:
-      seg = self._ctx.get_segmentation(self._camera_idx)
-      seg_data = seg.clone() if self.cfg.clone_data else seg
-    return CameraSensorData(rgb=rgb_data, depth=depth_data, segmentation=seg_data)
+    if data_type == "rgb":
+      return self._ctx.get_rgb(self._camera_idx)
+    if data_type == "depth":
+      return self._ctx.get_depth(self._camera_idx)
+    return self._ctx.get_segmentation(self._camera_idx)
+
+  def _output(self, data_type: CameraDataType) -> torch.Tensor | None:
+    if data_type not in self.cfg.data_types:
+      return None
+    if self._period is None:
+      fresh = self._render_output(data_type)
+      return fresh.clone() if self.cfg.clone_data else fresh
+    held = self._held[data_type]
+    return held.clone() if self.cfg.clone_data else held
+
+  def _compute_data(self) -> CameraSensorData:
+    return CameraSensorData(
+      rgb=self._output("rgb"),
+      depth=self._output("depth"),
+      segmentation=self._output("segmentation"),
+    )
