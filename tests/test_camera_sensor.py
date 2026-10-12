@@ -511,6 +511,25 @@ def test_camera_fps_reset_forces_fresh_frame(device):
   assert _refreshed(sensor.data.rgb, before).tolist() == [False, True, True, False]
 
 
+def test_camera_fps_reset_env_stays_due_until_time_advances(device):
+  """A state edit re-sensed after a reset reaches the reset envs."""
+  scene, sim, sensor = _fps_scene(device, fps=0.1 / STEP_DT)
+  _advance(scene, sim, 0)
+  sensor._elapsed.zero_()
+  scene.reset(torch.tensor([1, 2], device=device))
+  sim.sense()
+  after_reset = sensor.data.rgb.clone()
+  sim.data.qpos[:, 0] = 3 * BOX_STEP
+  sim.forward()
+  sim.sense()
+  assert _refreshed(sensor.data.rgb, after_reset).tolist() == [
+    False,
+    True,
+    True,
+    False,
+  ]
+
+
 def test_camera_fps_consumes_period_on_exact_boundary(device):
   """A clock landing on the period boundary refreshes once, not twice."""
   scene, sim, sensor = _fps_scene(device, fps=0.5 / STEP_DT, num_envs=2)

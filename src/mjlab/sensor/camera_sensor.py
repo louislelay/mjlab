@@ -153,13 +153,6 @@ class CameraSensorData:
   """
 
 
-_HELD_SHAPES: dict[CameraDataType, tuple[int, torch.dtype]] = {
-  "rgb": (3, torch.uint8),
-  "depth": (1, torch.float32),
-  "segmentation": (2, torch.int32),
-}
-"""Trailing channel count and dtype of each camera data type."""
-
 # Tolerance when comparing accumulated simulated time against the frame period,
 # so float accumulation error never skips a frame that is due.
 _FRAME_TIME_EPS = 1e-6
@@ -190,11 +183,6 @@ class CameraSensor(Sensor[CameraSensorData]):
   @property
   def camera_idx(self) -> int:
     return self._camera_idx
-
-  @property
-  def frame_period(self) -> float | None:
-    """Seconds between surfaced frames, or None when every sense is surfaced."""
-    return self._period
 
   def edit_spec(
     self,
@@ -251,21 +239,17 @@ class CameraSensor(Sensor[CameraSensorData]):
 
     if self._period is None:
       return
-    nworld = data.nworld
-    self._elapsed = torch.zeros(nworld, dtype=torch.float64, device=device)
+    self._elapsed = torch.zeros(data.nworld, dtype=torch.float64, device=device)
     self._arm(slice(None))
-    self._held = {
-      data_type: torch.zeros(
-        (nworld, self.cfg.height, self.cfg.width, channels),
-        dtype=dtype,
-        device=device,
-      )
-      for data_type, (channels, dtype) in _HELD_SHAPES.items()
-      if data_type in self.cfg.data_types
-    }
 
   def set_context(self, ctx: SensorContext) -> None:
     self._ctx = ctx
+    if self._period is None:
+      return
+    self._held = {
+      data_type: torch.zeros_like(self._render_output(data_type))
+      for data_type in self.cfg.data_types
+    }
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     super().reset(env_ids)
@@ -276,7 +260,7 @@ class CameraSensor(Sensor[CameraSensorData]):
     self._arm(env_ids)
 
   def _arm(self, env_ids: torch.Tensor | slice) -> None:
-    """Make ``env_ids`` due on the next sense with a fresh random phase after.
+    """Make ``env_ids`` due now, with a fresh random phase once time advances.
 
     Used at initialization and on reset so an env never starts an episode
     holding a stale frame, while refreshes stay staggered across envs.
@@ -296,15 +280,23 @@ class CameraSensor(Sensor[CameraSensorData]):
     Called by :class:`SensorContext` after every render. Without ``fps`` this
     only invalidates the cache so reads see the new render. With ``fps`` it
     copies the render into the held frame for environments whose frame period
-    has elapsed and leaves the others untouched.
+    has elapsed and leaves the others untouched. The period is only consumed
+    once simulated time has advanced, so an env stays due across repeated
+    senses at the same instant (e.g. a reset followed by a state edit).
     """
     self._invalidate_cache()
     if self._elapsed is None:
       return
     assert self._period is not None
     self._elapsed += self._pending_dt
-    self._pending_dt = 0.0
     due = self._elapsed >= self._period - _FRAME_TIME_EPS
+    due_mask = due.view(-1, 1, 1, 1)
+    for data_type, held in self._held.items():
+      fresh = self._render_output(data_type)
+      held.copy_(torch.where(due_mask, fresh, held))
+    if self._pending_dt == 0.0:
+      return
+    self._pending_dt = 0.0
     # Keep the sub-period remainder so each env's phase is preserved. Subtract
     # the period before taking the remainder so a clock within the tolerance
     # just below the period is consumed rather than left due again.
@@ -312,10 +304,6 @@ class CameraSensor(Sensor[CameraSensorData]):
       torch.clamp(self._elapsed - self._period, min=0.0), self._period
     )
     self._elapsed = torch.where(due, remainder, self._elapsed)
-    due_mask = due.view(-1, 1, 1, 1)
-    for data_type, held in self._held.items():
-      fresh = self._render_output(data_type)
-      held.copy_(torch.where(due_mask, fresh, held))
 
   def _render_output(self, data_type: CameraDataType) -> torch.Tensor:
     """View of the latest render for ``data_type`` (zero-copy)."""
