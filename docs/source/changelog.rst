@@ -12,6 +12,11 @@ Added
   sensor surfaces a new frame every ``1 / fps`` seconds of simulated time and holds the
   previous one in between, with a random per-environment phase and a fresh frame for
   reset environments. Rendering cost is unchanged.
+- Added ``CameraSensorCfg.phase``. With ``"aligned"`` all environments refresh on the
+  same control steps, and when every camera in the scene is aligned the simulation
+  skips rendering on steps where no camera is due, cutting render cost by the ratio
+  of the fastest camera's ``fps`` to the control rate. Steps that reset an environment
+  always render. ``Simulation.num_renders`` counts the senses that rendered.
 - Added ``SimulationCfg.graph_conditional`` to toggle MuJoCo Warp's CUDA graph
   conditional nodes, which require CUDA 12.4 or newer.
 

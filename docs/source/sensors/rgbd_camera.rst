@@ -185,10 +185,37 @@ Rates at or above the control rate behave like the default (a fresh
 frame every step), and the effective rate is quantized to control
 steps.
 
+By default (``phase="random"``) every environment has its own phase,
+so some environment is due on every step and frames are still
+rendered every step; ``fps`` alone does not reduce rendering cost.
+
+Set ``phase="aligned"`` to refresh all environments on the same
+control steps. When every camera in the scene is aligned, the
+simulation skips rendering on steps where no camera is due, so the
+render cost drops by the ratio of the fastest camera's rate to the
+control rate. Slower aligned cameras subsample the renders driven by
+the fastest one.
+
+.. code-block:: python
+
+    # 25 fps, all envs in lockstep: renders every other step.
+    CameraSensorCfg(
+        name="wrist_cam",
+        camera_name="robot/wrist_camera",
+        data_types=("rgb", "depth"),
+        fps=25.0,
+        phase="aligned",
+    )
+
 .. note::
 
-   ``fps`` does not reduce rendering cost. Frames are still rendered
-   every step; the ones between refreshes are simply not surfaced.
+   A step on which an environment is reset always renders, so the
+   reset environment never starts an episode holding a stale frame.
+   With thousands of environments and short episodes nearly every
+   step resets something, and the saving disappears. ``aligned`` pays
+   off with few environments or long episodes (evaluation, data
+   collection, small-batch training). ``Simulation.num_renders``
+   counts the senses that actually rendered.
 
 
 Render settings

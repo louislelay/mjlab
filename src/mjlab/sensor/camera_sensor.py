@@ -103,8 +103,22 @@ class CameraSensorCfg(SensorCfg):
   control steps.
 
   Note:
-    This does not reduce rendering cost. Frames are still rendered every
-    step; the ones between refreshes are simply not surfaced.
+    On its own this does not reduce rendering cost. Frames are still rendered
+    every step; the ones between refreshes are simply not surfaced. See
+    ``phase`` for how to skip renders.
+  """
+
+  phase: Literal["random", "aligned"] = "random"
+  """How frame refreshes are timed across environments when ``fps`` is set.
+
+  ``"random"`` gives each environment its own phase so refreshes are
+  staggered, like a fleet of unsynchronized cameras. ``"aligned"`` refreshes
+  every environment on the same control steps. When every camera in the scene
+  is aligned, the simulation skips rendering on steps where no camera is due,
+  cutting render cost by the ratio of the fastest camera's rate to the control
+  rate. Steps on which an environment is reset always render so it starts
+  with a fresh frame, so the saving shrinks as resets become more frequent.
+  Ignored when ``fps`` is None.
   """
 
   clone_data: bool = False
@@ -122,6 +136,8 @@ class CameraSensorCfg(SensorCfg):
       raise ValueError("At least one data type must be specified.")
     if self.fps is not None and self.fps <= 0:
       raise ValueError(f"fps must be positive, got {self.fps}.")
+    if self.phase not in ("random", "aligned"):
+      raise ValueError(f"phase must be 'random' or 'aligned', got {self.phase!r}.")
 
   def build(self) -> CameraSensor:
     return CameraSensor(self)
@@ -173,8 +189,14 @@ class CameraSensor(Sensor[CameraSensorData]):
     # Frame-rate state. Only used when ``cfg.fps`` is set.
     self._period: float | None = None if cfg.fps is None else 1.0 / cfg.fps
     self._pending_dt: float = 0.0
-    self._elapsed: torch.Tensor | None = None
     self._held: dict[CameraDataType, torch.Tensor] = {}
+    # Random phase: per-env time since the last refresh.
+    self._elapsed: torch.Tensor | None = None
+    # Aligned phase: one host-side clock shared by all envs, plus the envs reset
+    # since time last advanced, which must refresh regardless of the clock.
+    self._clock: float = 0.0
+    self._force: torch.Tensor | None = None
+    self._force_pending: bool = False
 
   @property
   def camera_name(self) -> str:
@@ -183,6 +205,27 @@ class CameraSensor(Sensor[CameraSensorData]):
   @property
   def camera_idx(self) -> int:
     return self._camera_idx
+
+  @property
+  def aligned(self) -> bool:
+    """Whether all envs refresh on the same senses (``fps`` set, aligned phase)."""
+    return self._period is not None and self.cfg.phase == "aligned"
+
+  @property
+  def needs_render(self) -> bool:
+    """Whether the next sense must render for this camera to be correct.
+
+    Always True unless the camera is aligned, in which case it is True only
+    when the shared clock will cross the frame period on the next sense or an
+    env was reset since simulated time last advanced. Evaluate before
+    :meth:`capture`.
+    """
+    if not self.aligned:
+      return True
+    assert self._period is not None
+    if self._force_pending:
+      return True
+    return self._clock + self._pending_dt >= self._period - _FRAME_TIME_EPS
 
   def edit_spec(
     self,
@@ -239,6 +282,11 @@ class CameraSensor(Sensor[CameraSensorData]):
 
     if self._period is None:
       return
+    if self.aligned:
+      # Due on the first sense; all envs share the clock afterwards.
+      self._clock = self._period
+      self._force = torch.zeros(data.nworld, dtype=torch.bool, device=device)
+      return
     self._elapsed = torch.zeros(data.nworld, dtype=torch.float64, device=device)
     self._arm(slice(None))
 
@@ -253,10 +301,15 @@ class CameraSensor(Sensor[CameraSensorData]):
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     super().reset(env_ids)
-    if self._elapsed is None:
+    if self._period is None:
       return
     if env_ids is None:
       env_ids = slice(None)
+    if self._force is not None:
+      # Aligned: refresh on the next sense but keep the shared clock.
+      self._force[env_ids] = True
+      self._force_pending = True
+      return
     self._arm(env_ids)
 
   def _arm(self, env_ids: torch.Tensor | slice) -> None:
@@ -274,26 +327,32 @@ class CameraSensor(Sensor[CameraSensorData]):
     super().update(dt)
     self._pending_dt += dt
 
-  def capture(self) -> None:
+  def capture(self, rendered: bool = True) -> None:
     """Take the freshly rendered frame into the surfaced output.
 
-    Called by :class:`SensorContext` after every render. Without ``fps`` this
+    Called by :class:`SensorContext` after every sense. Without ``fps`` this
     only invalidates the cache so reads see the new render. With ``fps`` it
     copies the render into the held frame for environments whose frame period
     has elapsed and leaves the others untouched. The period is only consumed
     once simulated time has advanced, so an env stays due across repeated
     senses at the same instant (e.g. a reset followed by a state edit).
+
+    Args:
+      rendered: Whether this sense rendered. May only be False when
+        :attr:`needs_render` was False before the sense; the clock still
+        advances so the next due step is computed correctly.
     """
     self._invalidate_cache()
-    if self._elapsed is None:
+    if self._period is None:
       return
-    assert self._period is not None
+    if self.aligned:
+      self._capture_aligned(rendered)
+      return
+    assert rendered, "Random-phase cameras need a render on every sense."
+    assert self._elapsed is not None
     self._elapsed += self._pending_dt
     due = self._elapsed >= self._period - _FRAME_TIME_EPS
-    due_mask = due.view(-1, 1, 1, 1)
-    for data_type, held in self._held.items():
-      fresh = self._render_output(data_type)
-      held.copy_(torch.where(due_mask, fresh, held))
+    self._refresh(due)
     if self._pending_dt == 0.0:
       return
     self._pending_dt = 0.0
@@ -304,6 +363,38 @@ class CameraSensor(Sensor[CameraSensorData]):
       torch.clamp(self._elapsed - self._period, min=0.0), self._period
     )
     self._elapsed = torch.where(due, remainder, self._elapsed)
+
+  def _capture_aligned(self, rendered: bool) -> None:
+    assert self._period is not None and self._force is not None
+    self._clock += self._pending_dt
+    due = self._clock >= self._period - _FRAME_TIME_EPS
+    if not rendered:
+      assert not due and not self._force_pending, (
+        "Sense skipped rendering while an aligned camera was due."
+      )
+      self._pending_dt = 0.0
+      return
+    if due:
+      for data_type, held in self._held.items():
+        held.copy_(self._render_output(data_type))
+    elif self._force_pending:
+      self._refresh(self._force)
+    if self._pending_dt == 0.0:
+      return
+    self._pending_dt = 0.0
+    if due:
+      # Same boundary handling as the per-env clock above.
+      self._clock = max(self._clock - self._period, 0.0) % self._period
+    if self._force_pending:
+      self._force.zero_()
+      self._force_pending = False
+
+  def _refresh(self, mask: torch.Tensor) -> None:
+    """Copy the latest render into the held frames of envs in ``mask``."""
+    env_mask = mask.view(-1, 1, 1, 1)
+    for data_type, held in self._held.items():
+      fresh = self._render_output(data_type)
+      held.copy_(torch.where(env_mask, fresh, held))
 
   def _render_output(self, data_type: CameraDataType) -> torch.Tensor:
     """View of the latest render for ``data_type`` (zero-copy)."""

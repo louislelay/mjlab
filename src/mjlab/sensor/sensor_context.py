@@ -97,6 +97,25 @@ class SensorContext:
   def render_context(self) -> mjwarp.RenderContext:
     return self._ctx
 
+  @property
+  def can_skip_render(self) -> bool:
+    """Whether some senses may skip rendering.
+
+    True when every camera has ``fps`` set with an aligned phase, so the
+    cameras can report ahead of time that no frame is due.
+    """
+    return self.has_cameras and all(s.aligned for s in self.camera_sensors)
+
+  def render_due(self) -> bool:
+    """Whether the upcoming sense must render.
+
+    Always True unless :attr:`can_skip_render`, in which case it is True only
+    if at least one camera is due for a frame. Call before the sense graph.
+    """
+    if not self.can_skip_render:
+      return True
+    return any(s.needs_render for s in self.camera_sensors)
+
   def recreate(
     self,
     mj_model: mujoco.MjModel,
@@ -115,16 +134,21 @@ class SensorContext:
     for sensor in self.raycast_sensors:
       sensor.prepare_rays()
 
-  def finalize(self) -> None:
-    """Post-graph: compute raycast hit positions."""
+  def finalize(self, rendered: bool = True) -> None:
+    """Post-graph: compute raycast hit positions and commit camera frames.
+
+    Args:
+      rendered: Whether the sense rendered. Pass False only when
+        :meth:`render_due` returned False for this sense.
+    """
     for sensor in self.raycast_sensors:
       sensor.postprocess_rays()
-    # Fresh render results: let each camera take the new frame (or hold its
-    # previous one, depending on its frame rate) and drop data cached by a
-    # pre-sense read so observations serve this step's output (mirrors the
-    # raycast invalidation in postprocess_rays).
+    # Let each camera take the new frame (or hold its previous one, depending
+    # on its frame rate) and drop data cached by a pre-sense read so
+    # observations serve this step's output (mirrors the raycast invalidation
+    # in postprocess_rays).
     for sensor in self.camera_sensors:
-      sensor.capture()
+      sensor.capture(rendered=rendered)
 
   def get_rgb(self, cam_idx: int) -> torch.Tensor:
     """Get unpacked RGB data for a camera.

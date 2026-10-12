@@ -416,6 +416,8 @@ FPS_CAM_XML = """
       </body>
       <camera name="overhead_cam" pos="0 0 3" quat="1 0 0 0"
               fovy="45" resolution="32 24"/>
+      <camera name="side_cam" pos="0 -3 1" xyaxes="1 0 0 0 0.3 1"
+              fovy="45" resolution="32 24"/>
     </worldbody>
   </mujoco>
 """
@@ -555,6 +557,145 @@ def test_camera_fps_above_control_rate_refreshes_every_sense(device):
     _advance(scene, sim, i)
     assert _refreshed(sensor.data.rgb, prev).all()
     prev = sensor.data.rgb.clone()
+
+
+def _aligned_cam(
+  name: str,
+  fps: float,
+  phase: str = "aligned",
+  camera_name: str = "world/overhead_cam",
+) -> CameraSensorCfg:
+  return CameraSensorCfg(
+    name=name,
+    camera_name=camera_name,
+    width=32,
+    height=24,
+    data_types=("rgb",),
+    fps=fps,
+    phase=phase,  # type: ignore[arg-type]
+  )
+
+
+def test_camera_phase_rejects_unknown():
+  with pytest.raises(ValueError, match="phase must be"):
+    CameraSensorCfg(name="cam", fps=10.0, phase="sometimes")  # type: ignore[arg-type]
+
+
+def test_aligned_camera_skips_renders_on_off_steps(device):
+  """All envs refresh together and the sim renders only on due steps."""
+  scene, sim = _make_scene_and_sim(
+    device, sensors=(_aligned_cam("cam", fps=0.5 / STEP_DT),), xml=FPS_CAM_XML
+  )
+  sensor = scene["cam"]
+  assert scene.sensor_context is not None
+  assert scene.sensor_context.can_skip_render
+
+  _advance(scene, sim, 0)
+  assert sim.num_renders == 1
+  prev = sensor.data.rgb.clone()
+  expected_changes = [True, False, True, False]
+  for i, expect in enumerate(expected_changes, start=1):
+    _advance(scene, sim, i)
+    refreshed = _refreshed(sensor.data.rgb, prev)
+    assert refreshed.tolist() == [expect] * refreshed.shape[0], f"sense {i}"
+    prev = sensor.data.rgb.clone()
+  assert sim.num_renders == 3
+
+
+def test_aligned_cameras_render_on_fastest(device):
+  """A slower aligned camera subsamples the renders driven by the fastest one."""
+  fast = _aligned_cam("fast", fps=0.5 / STEP_DT)
+  slow = _aligned_cam("slow", fps=0.25 / STEP_DT, camera_name="world/side_cam")
+  scene, sim = _make_scene_and_sim(device, sensors=(fast, slow), xml=FPS_CAM_XML)
+  _advance(scene, sim, 0)
+  fast_prev = scene["fast"].data.rgb.clone()
+  slow_prev = scene["slow"].data.rgb.clone()
+  fast_changes = []
+  slow_changes = []
+  for i in range(1, 9):
+    _advance(scene, sim, i)
+    fast_changes.append(bool(_refreshed(scene["fast"].data.rgb, fast_prev).all()))
+    slow_changes.append(bool(_refreshed(scene["slow"].data.rgb, slow_prev).all()))
+    fast_prev = scene["fast"].data.rgb.clone()
+    slow_prev = scene["slow"].data.rgb.clone()
+  assert fast_changes == [True, False] * 4
+  assert slow_changes == [False, False, True, False] * 2
+  # 1 initial + 4 driven by the fast camera.
+  assert sim.num_renders == 5
+
+
+def test_aligned_camera_reset_renders_off_step(device):
+  """Reset envs force a render on an off step and refresh only themselves."""
+  scene, sim = _make_scene_and_sim(
+    device,
+    sensors=(_aligned_cam("cam", fps=0.1 / STEP_DT),),
+    xml=FPS_CAM_XML,
+    num_envs=4,
+  )
+  sensor = scene["cam"]
+  _advance(scene, sim, 0)
+  before = sensor.data.rgb.clone()
+  scene.reset(torch.tensor([1, 2], device=device))
+  _advance(scene, sim, 1)
+  assert sim.num_renders == 2
+  assert _refreshed(sensor.data.rgb, before).tolist() == [False, True, True, False]
+  # The shared clock is unaffected: nothing is due on the following step.
+  _advance(scene, sim, 2)
+  assert sim.num_renders == 2
+
+
+def test_aligned_camera_reset_env_stays_due_until_time_advances(device):
+  """A state edit re-sensed after a reset renders and reaches the reset envs."""
+  scene, sim = _make_scene_and_sim(
+    device,
+    sensors=(_aligned_cam("cam", fps=0.1 / STEP_DT),),
+    xml=FPS_CAM_XML,
+    num_envs=4,
+  )
+  sensor = scene["cam"]
+  _advance(scene, sim, 0)
+  scene.reset(torch.tensor([1, 2], device=device))
+  sim.sense()
+  after_reset = sensor.data.rgb.clone()
+  sim.data.qpos[:, 0] = 3 * BOX_STEP
+  sim.forward()
+  sim.sense()
+  assert sim.num_renders == 3
+  assert _refreshed(sensor.data.rgb, after_reset).tolist() == [
+    False,
+    True,
+    True,
+    False,
+  ]
+
+
+def test_random_phase_camera_disables_render_skip(device):
+  """One random-phase camera forces a render on every sense."""
+  aligned = _aligned_cam("aligned", fps=0.5 / STEP_DT)
+  random = _aligned_cam(
+    "random", fps=0.5 / STEP_DT, phase="random", camera_name="world/side_cam"
+  )
+  scene, sim = _make_scene_and_sim(device, sensors=(aligned, random), xml=FPS_CAM_XML)
+  assert scene.sensor_context is not None
+  assert not scene.sensor_context.can_skip_render
+  for i in range(4):
+    _advance(scene, sim, i)
+  assert sim.num_renders == 4
+
+
+@pytest.mark.skipif(
+  not torch.cuda.is_available(), reason="CUDA required for sense graph"
+)
+def test_sense_no_render_graph_captured_only_when_aligned(device):
+  scene, sim = _make_scene_and_sim(
+    device, sensors=(_aligned_cam("cam", fps=0.5 / STEP_DT),), xml=FPS_CAM_XML
+  )
+  if sim.use_cuda_graph:
+    assert sim.sense_no_render_graph is not None
+  scene, sim = _make_scene_and_sim(
+    device, sensors=(_aligned_cam("cam", fps=0.5 / STEP_DT, phase="random"),)
+  )
+  assert sim.sense_no_render_graph is None
 
 
 def test_camera_create_on_parent_body(device):

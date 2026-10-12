@@ -345,6 +345,7 @@ class Simulation:
     self._model_bridge = WarpBridge(self._wp_model, nworld=self.num_envs)
     self._data_bridge = WarpBridge(self._wp_data)
     self._sensor_context: SensorContext | None = None
+    self._num_renders = 0
 
     self.use_cuda_graph = self._should_use_cuda_graph()
     self.create_graph()
@@ -369,6 +370,7 @@ class Simulation:
     self.forward_graph = None
     self.reset_graph = None
     self.sense_graph = None
+    self.sense_no_render_graph = None
     if self.use_cuda_graph:
       with _suspend_gc(), wp.ScopedDevice(self.wp_device):
         with wp.ScopedCapture() as capture:
@@ -382,8 +384,12 @@ class Simulation:
         self.reset_graph = capture.graph
         if self._sensor_context is not None:
           with wp.ScopedCapture() as capture:
-            self._sense_kernel()
+            self._sense_kernel(render=True)
           self.sense_graph = capture.graph
+        if self._sensor_context is not None and self._sensor_context.can_skip_render:
+          with wp.ScopedCapture() as capture:
+            self._sense_kernel(render=False)
+          self.sense_no_render_graph = capture.graph
 
   # Properties.
 
@@ -526,38 +532,57 @@ class Simulation:
     self._sensor_context = ctx
     self.create_graph()
 
+  @property
+  def num_renders(self) -> int:
+    """Number of senses that rendered cameras so far.
+
+    Differs from the number of ``sense()`` calls only when every camera is
+    aligned (see ``CameraSensorCfg.phase``) and some senses skipped rendering.
+    """
+    return self._num_renders
+
   def sense(self) -> None:
     """Execute the sense pipeline: prepare -> graph -> finalize.
 
     Runs BVH refit, camera rendering, and raycasting in a single
     CUDA graph launch. Should be called once per env step, right
-    before observation computation.
+    before observation computation. When every camera is aligned and
+    none is due for a frame, the render is skipped and only the BVH
+    refit and raycasts run.
     """
     if self._sensor_context is None:
       return
 
     ctx = self._sensor_context
     ctx.prepare()
+    render = ctx.render_due()
+    self._num_renders += int(render)
 
     with wp.ScopedDevice(self.wp_device):
-      if self.use_cuda_graph and self.sense_graph is not None:
-        wp.capture_launch(self.sense_graph)
+      graph = self.sense_graph if render else self.sense_no_render_graph
+      if self.use_cuda_graph and graph is not None:
+        wp.capture_launch(graph)
       else:
-        self._sense_kernel()
+        self._sense_kernel(render=render)
 
-    ctx.finalize()
+    ctx.finalize(rendered=render)
 
   # Private methods.
 
-  def _sense_kernel(self) -> None:
-    """GPU kernel sequence for sensing (captured in sense_graph)."""
+  def _sense_kernel(self, render: bool) -> None:
+    """GPU kernel sequence for sensing (captured in the sense graphs).
+
+    Args:
+      render: Whether to render cameras. False captures the variant used on
+        steps where no aligned camera is due.
+    """
     assert self._sensor_context is not None
     ctx = self._sensor_context
     rc = ctx.render_context
 
     mjwarp.refit_bvh(self.wp_model, self.wp_data, rc)
 
-    if ctx.has_cameras:
+    if render and ctx.has_cameras:
       mjwarp.render(self.wp_model, self.wp_data, rc)
       ctx.unpack_rgb()
 
