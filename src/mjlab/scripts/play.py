@@ -19,6 +19,7 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.checkpoint_source import (
   CheckpointSource,
   LocalCheckpointSource,
+  WandbCheckpointSource,
   make_checkpoint_source,
 )
 from mjlab.utils.torch import configure_torch_backends
@@ -33,17 +34,11 @@ class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
   registry_name: str | None = None
   checkpoint_source: str = "wandb"
-  """Backend ``checkpoint_run`` refers to: ``local``, ``wandb``, or the import path
-  of a ``mjlab.utils.checkpoint_source.CheckpointSource`` subclass."""
+  """``wandb`` or a ``CheckpointSource`` import path like ``my_pkg.sources:Src``."""
   checkpoint_run: str | None = None
-  """Run to load checkpoints from (e.g. ``entity/project/run_id`` for W&B)."""
+  """Run to load checkpoints from, e.g. ``entity/project/run_id`` for W&B."""
   checkpoint_name: str | None = None
-  """Optional checkpoint name within the run (e.g. 'model_4000.pt'). Defaults to the
-  latest."""
-  wandb_run_path: str | None = None
-  """Alias for ``checkpoint_run`` with the W&B source."""
-  wandb_checkpoint_name: str | None = None
-  """Alias for ``checkpoint_name``."""
+  """Checkpoint within the run, e.g. 'model_4000.pt'. Defaults to the latest."""
   checkpoint_file: str | None = None
   motion_file: str | None = None
   num_envs: int | None = None
@@ -96,8 +91,6 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE
-  checkpoint_run = cfg.checkpoint_run or cfg.wandb_run_path
-  checkpoint_name = cfg.checkpoint_name or cfg.wandb_checkpoint_name
 
   # Disable terminations if requested (useful for viewing motions).
   if cfg.no_terminations:
@@ -139,23 +132,9 @@ def run_play(task_id: str, cfg: PlayConfig):
       api = wandb.Api()
       artifact = api.artifact(registry_name)
       motion_cmd.motion_file = str(Path(artifact.download()) / "motion.npz")
-    else:
-      if cfg.motion_file is not None:
-        print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
-        motion_cmd.motion_file = cfg.motion_file
-      else:
-        if checkpoint_run is None or cfg.checkpoint_source != "wandb":
-          raise ValueError(
-            "Tracking tasks require `motion_file` unless the checkpoint comes from "
-            "a W&B run (`wandb_run_path`), whose motion artifact is used instead."
-          )
-        import wandb
-
-        wandb_run = wandb.Api().run(checkpoint_run)
-        art = next((a for a in wandb_run.used_artifacts() if a.type == "motions"), None)
-        if art is None:
-          raise RuntimeError("No motion artifact found in the run.")
-        motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
+    elif cfg.motion_file is not None:
+      print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
+      motion_cmd.motion_file = cfg.motion_file
 
   log_dir: Path | None = None
   resume_path: Path | None = None
@@ -169,21 +148,34 @@ def run_play(task_id: str, cfg: PlayConfig):
       print(f"[INFO]: Loading checkpoint: {resume_path.name}")
       source = LocalCheckpointSource(str(resume_path.parent), log_root_path)
     else:
-      if checkpoint_run is None:
+      if cfg.checkpoint_run is None:
         raise ValueError(
-          "`checkpoint_run` (or `wandb_run_path`) is required when "
-          "`checkpoint_file` is not provided."
+          "`checkpoint_run` is required when `checkpoint_file` is not provided."
         )
       source = make_checkpoint_source(
-        cfg.checkpoint_source, checkpoint_run, log_root_path
+        cfg.checkpoint_source, cfg.checkpoint_run, log_root_path
       )
-      resume_path, was_cached = source.resolve(checkpoint_name)
+      resume_path, was_cached = source.resolve(cfg.checkpoint_name)
       cached_str = "cached" if was_cached else "downloaded"
       print(
         f"[INFO]: Loading checkpoint from {source.label}: {resume_path.name} "
-        f"(run: {checkpoint_run}, {cached_str})"
+        f"(run: {cfg.checkpoint_run}, {cached_str})"
       )
     log_dir = resume_path.parent
+
+  if is_tracking_task and TRAINED_MODE and cfg.motion_file is None:
+    if not isinstance(source, WandbCheckpointSource):
+      raise ValueError(
+        "Tracking tasks require `motion_file` unless the checkpoint comes from a "
+        "W&B run, whose motion artifact is used instead."
+      )
+    used = source.wandb_run.used_artifacts()
+    art = next((a for a in used if a.type == "motions"), None)
+    if art is None:
+      raise RuntimeError("No motion artifact found in the run.")
+    motion_cmd = env_cfg.commands["motion"]
+    assert isinstance(motion_cmd, MotionCommandCfg)
+    motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
 
   if cfg.num_envs is not None:
     env_cfg.scene.num_envs = cfg.num_envs

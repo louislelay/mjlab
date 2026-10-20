@@ -5,6 +5,7 @@ Adapted from an MJX visualizer by Chung Min Kim: https://github.com/chungmin99/
 
 from __future__ import annotations
 
+import html
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -222,7 +223,7 @@ class ViserPlayViewer(BaseViewer):
 
     # Checkpoints tab (optional, when checkpoint_manager is provided).
     if self._ckpt_mgr is not None:
-      label = self._ckpt_mgr.source_label
+      label = html.escape(self._ckpt_mgr.source_label)
       url = self._ckpt_mgr.run_url
       with tabs.add_tab("Checkpoints", icon=viser.Icon.DATABASE):
         if url is not None:
@@ -231,10 +232,10 @@ class ViserPlayViewer(BaseViewer):
             'padding:0 1em 0.5em 1em;">'
             f"<strong>Source:</strong> {label}<br/>"
             f"<strong>Run:</strong>"
-            f" {self._ckpt_mgr.run_name}<br/>"
+            f" {html.escape(str(self._ckpt_mgr.run_name))}<br/>"
             f"<strong>Status:</strong>"
-            f" {self._ckpt_mgr.run_status}<br/>"
-            f'<a href="{url}" target="_blank"'
+            f" {html.escape(str(self._ckpt_mgr.run_status))}<br/>"
+            f'<a href="{html.escape(url)}" target="_blank"'
             f' style="color:#3b82f6;">'
             f"Open in {label}</a>"
             "</div>"

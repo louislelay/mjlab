@@ -37,18 +37,12 @@ class TrainConfig:
   """Root directory under which experiment logs are written."""
   torchrunx_log_dir: str | None = None
   checkpoint_source: str = "wandb"
-  """Backend ``checkpoint_run`` refers to: ``local``, ``wandb``, or the import path
-  of a ``mjlab.utils.checkpoint_source.CheckpointSource`` subclass."""
+  """``wandb`` or a ``CheckpointSource`` import path like ``my_pkg.sources:Src``."""
   checkpoint_run: str | None = None
-  """Run to resume from (e.g. ``entity/project/run_id`` for W&B). When unset,
+  """Run to resume from, e.g. ``entity/project/run_id`` for W&B. If unset,
   ``agent.load_run`` is searched under the local log root."""
   checkpoint_name: str | None = None
-  """Optional checkpoint name within the run (e.g. 'model_4000.pt'). Defaults to the
-  latest."""
-  wandb_run_path: str | None = None
-  """Alias for ``checkpoint_run`` with the W&B source."""
-  wandb_checkpoint_name: str | None = None
-  """Alias for ``checkpoint_name``."""
+  """Checkpoint within the run, e.g. 'model_4000.pt'. Defaults to the latest."""
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 
   @staticmethod
@@ -128,19 +122,16 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
 
   resume_path: Path | None = None
   if cfg.agent.resume:
-    checkpoint_run = cfg.checkpoint_run or cfg.wandb_run_path
-    if checkpoint_run is not None:
+    if cfg.checkpoint_run is not None:
       source = make_checkpoint_source(
-        cfg.checkpoint_source, checkpoint_run, log_root_path
+        cfg.checkpoint_source, cfg.checkpoint_run, log_root_path
       )
-      resume_path, was_cached = source.resolve(
-        cfg.checkpoint_name or cfg.wandb_checkpoint_name
-      )
+      resume_path, was_cached = source.resolve(cfg.checkpoint_name)
       if rank == 0:
         cached_str = "cached" if was_cached else "downloaded"
         print(
           f"[INFO]: Loading checkpoint from {source.label}: {resume_path.name} "
-          f"(run: {checkpoint_run}, {cached_str})"
+          f"(run: {cfg.checkpoint_run}, {cached_str})"
         )
     else:
       # Load checkpoint from local filesystem.

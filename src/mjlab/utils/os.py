@@ -38,13 +38,11 @@ def get_checkpoint_path(
   """
   if not log_path.exists():
     raise ValueError(f"Log path does not exist: {log_path}")
-  # Exclude *_checkpoints directories, which cache downloaded remote checkpoints.
+  # Exclude wandb_checkpoints directory which is used for caching downloaded checkpoints.
   runs = [
     log_path / run.name
     for run in log_path.iterdir()
-    if run.is_dir()
-    and not run.name.endswith("_checkpoints")
-    and re.match(run_dir, run.name)
+    if run.is_dir() and run.name != "wandb_checkpoints" and re.match(run_dir, run.name)
   ]
   if len(runs) == 0:
     raise ValueError(f"No run directories found in {log_path} matching '{run_dir}'")

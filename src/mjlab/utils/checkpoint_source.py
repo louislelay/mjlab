@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import importlib
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+from rsl_rl.utils import resolve_callable
+
+if TYPE_CHECKING:
+  from wandb.apis.public import Run
 
 _STEP_PATTERN = re.compile(r"^model_(\d+)\.pt$")
 
@@ -32,10 +36,9 @@ class CheckpointInfo:
 class CheckpointSource(ABC):
   """Lists and fetches the checkpoints of a single training run.
 
-  Sources are built as ``cls(run, cache_root)``. ``run`` identifies the run in the
-  backend, and ``cache_root`` is the experiment log directory. Remote sources should
-  cache downloads in a subdirectory of ``cache_root`` whose name ends with
-  ``_checkpoints``, which local resume skips when looking for runs.
+  Built as ``cls(run, cache_root)``, where ``cache_root`` is the experiment log
+  directory. Local resume treats every subdirectory of it except
+  ``wandb_checkpoints`` as a run, so other sources must cache downloads elsewhere.
   """
 
   label: str = "Remote"
@@ -51,11 +54,7 @@ class CheckpointSource(ABC):
 
   @abstractmethod
   def download(self, name: str) -> tuple[Path, bool]:
-    """Return a local path to checkpoint ``name``, downloading it if needed.
-
-    Returns:
-      The local path and whether it was already cached.
-    """
+    """Return a local path to checkpoint ``name`` and whether it was cached."""
 
   @property
   def run_name(self) -> str | None:
@@ -69,15 +68,11 @@ class CheckpointSource(ABC):
 
   @property
   def run_status(self) -> str | None:
-    """Status of the run (e.g. ``"running"``), if the backend reports one."""
+    """Status of the run, e.g. ``"running"``, if the backend reports one."""
     return None
 
   def resolve(self, name: str | None = None) -> tuple[Path, bool]:
-    """Fetch checkpoint ``name``, or the latest ``model_<step>.pt`` if None.
-
-    Returns:
-      The local path and whether it was already cached.
-    """
+    """Fetch checkpoint ``name``, or the latest ``model_<step>.pt`` if None."""
     available = [c for c in self.list_checkpoints() if _STEP_PATTERN.match(c.name)]
     if not available:
       raise ValueError(f"No model_<step>.pt checkpoint found in run {self.run}.")
@@ -116,8 +111,7 @@ class WandbCheckpointSource(CheckpointSource):
     # Imported lazily because importing wandb is slow.
     import wandb
 
-    self.wandb_run: Any = wandb.Api().run(run)
-    """The ``wandb.apis.public.Run``, e.g. to look up artifacts it used."""
+    self.wandb_run: Run = wandb.Api().run(run)
     self._cache_dir = cache_root / "wandb_checkpoints" / run.split("/")[-1]
 
   @property
@@ -149,39 +143,19 @@ class WandbCheckpointSource(CheckpointSource):
     return path, False
 
 
-_BUILTIN_SOURCES: dict[str, type[CheckpointSource]] = {
-  "local": LocalCheckpointSource,
-  "wandb": WandbCheckpointSource,
-}
-
-
 def make_checkpoint_source(source: str, run: str, cache_root: Path) -> CheckpointSource:
-  """Build a checkpoint source from an alias or an import path.
-
-  Args:
-    source: ``"local"``, ``"wandb"``, or the import path of a
-      :class:`CheckpointSource` subclass (e.g. ``"my_pkg.sources:MySource"``).
-    run: Identifier of the run in that backend.
-    cache_root: Experiment log directory, under which downloads are cached.
-
-  Returns:
-    The constructed source.
-  """
-  source_cls = _BUILTIN_SOURCES.get(source) or _import_source_class(source)
-  return source_cls(run, cache_root)
-
-
-def _import_source_class(path: str) -> type[CheckpointSource]:
-  module_name, sep, attr = path.partition(":")
-  if not sep:
+  """Build ``source`` (``"wandb"`` or an import path) for ``run``."""
+  if source == "wandb":
+    return WandbCheckpointSource(run, cache_root)
+  if ":" not in source:
     raise ValueError(
-      f"Unknown checkpoint source {path!r}. Expected one of "
-      f"{sorted(_BUILTIN_SOURCES)} or an import path like 'my_pkg.sources:MySource'."
+      f"Unknown checkpoint source {source!r}. Expected 'wandb' or an import path "
+      "like 'my_pkg.sources:MySource'."
     )
-  source_cls = getattr(importlib.import_module(module_name), attr)
+  source_cls = resolve_callable(source)
   if not (isinstance(source_cls, type) and issubclass(source_cls, CheckpointSource)):
-    raise TypeError(f"{path!r} is not a CheckpointSource subclass.")
-  return source_cls
+    raise TypeError(f"{source!r} is not a CheckpointSource subclass.")
+  return source_cls(run, cache_root)
 
 
 def _parse_wandb_dt(value: str | datetime) -> datetime:

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import wandb
 
+from mjlab.scripts.play import _make_checkpoint_manager
 from mjlab.utils.checkpoint_source import (
   CheckpointInfo,
   CheckpointSource,
@@ -13,7 +14,7 @@ from mjlab.utils.checkpoint_source import (
   WandbCheckpointSource,
   make_checkpoint_source,
 )
-from mjlab.utils.os import get_checkpoint_path
+from mjlab.viewer.base import PolicyProtocol
 
 
 class _StaticCheckpointSource(CheckpointSource):
@@ -22,7 +23,7 @@ class _StaticCheckpointSource(CheckpointSource):
   label = "Static"
 
   def list_checkpoints(self) -> list[CheckpointInfo]:
-    return [CheckpointInfo("model_5.pt", 0.0)]
+    return [CheckpointInfo("model_10.pt", 0.0), CheckpointInfo("model_5.pt", 0.0)]
 
   def download(self, name: str) -> tuple[Path, bool]:
     return self.cache_root / name, False
@@ -45,20 +46,17 @@ def test_local_source_resolves_latest_and_named(run_dir):
     source.resolve("model_7.pt")
 
 
-def test_make_checkpoint_source_from_alias_and_import_path(run_dir):
-  local = make_checkpoint_source("local", str(run_dir), run_dir.parent)
-  assert isinstance(local, LocalCheckpointSource)
-
-  custom = make_checkpoint_source(
-    f"{__name__}:_StaticCheckpointSource", "run-id", run_dir.parent
+def test_make_checkpoint_source_from_import_path(tmp_path):
+  source = make_checkpoint_source(
+    f"{__name__}:_StaticCheckpointSource", "run-id", tmp_path
   )
-  assert isinstance(custom, _StaticCheckpointSource)
-  assert custom.resolve() == (run_dir.parent / "model_5.pt", False)
+  assert isinstance(source, _StaticCheckpointSource)
+  assert source.resolve() == (tmp_path / "model_10.pt", False)
 
 
 @pytest.mark.parametrize(
   ("source", "error"),
-  [("mlflow", ValueError), ("pathlib:Path", TypeError)],
+  [("local", ValueError), ("pathlib:Path", TypeError)],
 )
 def test_make_checkpoint_source_rejects_invalid(source, error, tmp_path):
   with pytest.raises(error):
@@ -93,8 +91,20 @@ def test_wandb_source_downloads_latest_into_cache(monkeypatch, tmp_path):
   assert downloaded == [("model_2000.pt", str(cache_dir))]
 
 
-def test_local_resume_skips_checkpoint_caches(run_dir):
-  cache = run_dir.parent / "zzz_checkpoints" / "run"
-  cache.mkdir(parents=True)
-  (cache / "model_1.pt").touch()
-  assert get_checkpoint_path(run_dir.parent) == run_dir / "model_100.pt"
+def test_checkpoint_manager_lists_by_step_and_loads_downloads(tmp_path):
+  loaded: list[str] = []
+
+  def load_policy(path: str) -> PolicyProtocol:
+    loaded.append(path)
+    return lambda obs: obs
+
+  source = _StaticCheckpointSource("run-id", tmp_path)
+  manager = _make_checkpoint_manager(source, "model_10.pt", load_policy)
+
+  assert [name for name, _ in manager.fetch_available()] == [
+    "model_5.pt",
+    "model_10.pt",
+  ]
+  manager.load_checkpoint("model_5.pt")
+  assert loaded == [str(tmp_path / "model_5.pt")]
+  assert manager.source_label == "Static"
