@@ -122,8 +122,8 @@ class RslRlBaseRunnerCfg:
   clip_actions: float | None = None
   """The clipping range for action values. If None (default), no clipping is applied."""
   upload_model: bool = True
-  """Whether to upload model files (.pt, .onnx) to W&B on save. Set to
-  False to keep metric logging but avoid storage usage. Default is True."""
+  """Whether to upload model files (.pt, .onnx) through the log writer on save.
+  Set to False to keep metric logging but avoid storage usage. Default is True."""
 
   def __post_init__(self) -> None:
     if self.logger not in ("wandb", "tensorboard") and ":" not in self.logger:
