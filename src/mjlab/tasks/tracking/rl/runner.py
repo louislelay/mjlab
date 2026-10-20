@@ -106,7 +106,8 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
         }
       )
       attach_metadata_to_onnx(str(onnx_path), metadata)
-      self._upload_onnx(onnx_path)
+      self._upload_model(str(onnx_path))
+      # LogWriter has no hook for linking an input artifact, so this stays W&B-only.
       is_wandb = isinstance(self.logger.writer, WandbLogWriter)
       if is_wandb and self.cfg["upload_model"] and self.registry_name is not None:
         wandb.run.use_artifact(self.registry_name)  # type: ignore

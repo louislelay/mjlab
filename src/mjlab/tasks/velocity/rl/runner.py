@@ -16,6 +16,6 @@ class VelocityOnPolicyRunner(MjlabOnPolicyRunner):
       self.export_policy_to_onnx(str(policy_dir), filename)
       metadata = get_base_metadata(self.env.unwrapped, self._get_run_name())
       attach_metadata_to_onnx(str(onnx_path), metadata)
-      self._upload_onnx(onnx_path)
+      self._upload_model(str(onnx_path))
     except Exception as e:
       print(f"[WARN] ONNX export failed (training continues): {e}")
