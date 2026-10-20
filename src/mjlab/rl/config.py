@@ -102,8 +102,13 @@ class RslRlBaseRunnerCfg:
   """Optional label appended to the timestamped run directory
   (e.g. ``2025-01-27_14-30-00_{run_name}``). Also becomes the
   display name for the run in wandb."""
-  logger: Literal["wandb", "tensorboard"] = "wandb"
-  """The logger to use. Default is wandb."""
+  logger: str = "wandb"
+  """The logger to use. Either ``"wandb"``, ``"tensorboard"``, or the import path of
+  an ``rsl_rl.utils.LogWriter`` subclass (e.g. ``"my_pkg.writers:MyLogWriter"``).
+  Default is wandb."""
+  logger_kwargs: dict[str, str | int | float | bool] = field(default_factory=dict)
+  """Extra keyword arguments passed to the log writer's constructor. Ignored by the
+  tensorboard logger."""
   wandb_project: str = "mjlab"
   """The wandb project name."""
   wandb_tags: Tuple[str, ...] = ()

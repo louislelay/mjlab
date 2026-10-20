@@ -12,7 +12,7 @@ import pytest
 import torch
 from conftest import get_test_device
 from rsl_rl.models import MLPModel
-from rsl_rl.utils import WandbLogWriter
+from rsl_rl.utils import LogWriter, WandbLogWriter
 from rsl_rl.utils.logger import Logger
 from tensordict import TensorDict
 
@@ -22,7 +22,7 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg, mdp
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.rl.runner import MjlabOnPolicyRunner
+from mjlab.rl.runner import MjlabOnPolicyRunner, resolve_logger_cfg
 from mjlab.rl.spatial_softmax import SpatialSoftmaxCNNModel
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
@@ -523,6 +523,63 @@ def test_onnx_motion_model_clamps_out_of_bounds_time_step():
     _, joint_pos, *_ = model(x, time_step)
 
   torch.testing.assert_close(joint_pos, motion.joint_pos[num_steps - 1 : num_steps])
+
+
+class _RecordingLogWriter(LogWriter):
+  """Custom log writer resolved by import path in the tests below."""
+
+  def __init__(self, log_dir: str, prefix: str = "") -> None:
+    self.log_dir = log_dir
+    self.prefix = prefix
+
+  def add_scalar(self, tag: str, scalar_value: float, global_step: int) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+  ("logger", "logger_kwargs", "expected"),
+  [
+    ("tensorboard", {"ignored": 1}, "tensorboard"),
+    (
+      "wandb",
+      {},
+      {"class_name": "WandbLogWriter", "project_name": "mjlab"},
+    ),
+    (
+      "my_pkg.writers:MyLogWriter",
+      {"uri": "http://localhost"},
+      {"class_name": "my_pkg.writers:MyLogWriter", "uri": "http://localhost"},
+    ),
+  ],
+)
+def test_resolve_logger_cfg(logger, logger_kwargs, expected):
+  cfg = asdict(RslRlOnPolicyRunnerCfg(logger=logger, logger_kwargs=logger_kwargs))
+  assert resolve_logger_cfg(cfg) == expected
+
+
+def test_custom_log_writer_is_built_from_import_path(tmp_path):
+  """rsl-rl constructs a LogWriter given by import path, with logger_kwargs."""
+  cfg = asdict(
+    RslRlOnPolicyRunnerCfg(
+      logger=f"{__name__}:_RecordingLogWriter", logger_kwargs={"prefix": "x"}
+    )
+  )
+  cfg["logger"] = resolve_logger_cfg(cfg)
+  logger = Logger(
+    log_dir=str(tmp_path),
+    cfg=cfg,
+    env_cfg={},
+    num_envs=1,
+    is_distributed=False,
+    gpu_world_size=1,
+    gpu_global_rank=0,
+    device="cpu",
+  )
+  logger.init_logging_writer()
+
+  assert isinstance(logger.writer, _RecordingLogWriter)
+  assert logger.writer.log_dir == str(tmp_path)
+  assert logger.writer.prefix == "x"
 
 
 def _make_logger_mock(is_wandb: bool) -> MagicMock:

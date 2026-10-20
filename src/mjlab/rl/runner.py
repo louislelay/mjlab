@@ -8,6 +8,27 @@ from rsl_rl.runners import OnPolicyRunner
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
+def resolve_logger_cfg(train_cfg: dict) -> str | dict:
+  """Convert mjlab's logger fields into the ``logger`` entry rsl-rl expects.
+
+  Args:
+    train_cfg: Runner config dict with ``logger`` and optional ``logger_kwargs``
+      and ``wandb_project`` entries.
+
+  Returns:
+    ``"tensorboard"``, or a dict with a ``class_name`` key and the writer's
+    constructor kwargs.
+  """
+  logger = train_cfg.get("logger", "tensorboard")
+  if logger == "tensorboard":
+    return logger
+  kwargs = train_cfg.get("logger_kwargs") or {}
+  if logger == "wandb":
+    project = train_cfg.get("wandb_project")
+    return {"class_name": "WandbLogWriter", "project_name": project, **kwargs}
+  return {"class_name": logger, **kwargs}
+
+
 class MjlabOnPolicyRunner(OnPolicyRunner):
   """Base runner that persists environment state across checkpoints."""
 
@@ -29,6 +50,7 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
         if train_cfg[key].get("rnn_type") is None:
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
+    train_cfg["logger"] = resolve_logger_cfg(train_cfg)
     super().__init__(env, train_cfg, log_dir, device)
 
   def export_policy_to_onnx(

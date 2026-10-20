@@ -15,6 +15,10 @@ Added
   kernels for Blackwell GPUs.
 - Added ``SimulationCfg.graph_conditional`` to toggle MuJoCo Warp's CUDA graph
   conditional nodes, which require CUDA 12.4 or newer.
+- ``RslRlBaseRunnerCfg.logger`` now also accepts the import path of a custom
+  ``rsl_rl.utils.LogWriter`` subclass (e.g. ``"my_pkg.writers:MyLogWriter"``), and
+  the new ``logger_kwargs`` field is forwarded to its constructor. This lets
+  projects log to backends other than W&B and TensorBoard.
 - Added ``RewardManager.term_rewards`` and ``RewardManager.get_term()`` for the
   per-term reward vector from the last step :issue:`1223`.
 
@@ -31,6 +35,8 @@ Changed
 - ``BuiltinDcMotorActuatorCfg`` PID gains are now in torque space, following
   MuJoCo 3.14. VELOCITY mode requires ``damping > 0`` and ``stiffness = 0``, and
   VOLTAGE mode rejects ``voltage_limit`` and ``slew_rate``.
+- ``--agent.logger wandb`` is now passed to rsl-rl in its dict form, which removes
+  rsl-rl's deprecation warning about the plain ``"wandb"`` string.
 - Bumped ``rsl-rl-lib`` from 5.5.0 to 5.5.1. This removes the need for capping
   ``wandb`` below 0.29.
 
