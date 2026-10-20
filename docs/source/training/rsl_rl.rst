@@ -232,34 +232,13 @@ config to disable uploads while keeping metric logging.
 .. rubric:: Using a different logger
 
 ``--agent.logger`` accepts ``wandb`` (the default), ``tensorboard``, or the
-import path of a subclass of ``rsl_rl.utils.LogWriter``. A writer only has to
-implement ``add_scalar``. It can also override ``store_config``,
-``save_model``, ``save_file``, ``save_video`` and ``stop`` to upload configs,
-checkpoints, and videos. Constructor arguments other than ``log_dir`` come from
-``logger_kwargs``:
-
-.. code-block:: python
-
-    # my_pkg/writers.py
-    from rsl_rl.utils import LogWriter
-
-
-    class PrintLogWriter(LogWriter):
-        def __init__(self, log_dir: str, every: int = 10) -> None:
-            self.every = int(every)
-
-        def add_scalar(self, tag: str, scalar_value: float, global_step: int) -> None:
-            if global_step % self.every == 0:
-                print(f"[{global_step}] {tag}: {scalar_value}")
+import path of an ``rsl_rl.utils.LogWriter`` subclass, which is constructed with
+``log_dir`` only:
 
 .. code-block:: bash
 
     uv run train Mjlab-Velocity-Flat-Unitree-G1 \
-        --agent.logger my_pkg.writers:PrintLogWriter \
-        --agent.logger-kwargs every 50
-
-Values passed on the command line reach the writer as strings, so convert them
-in the constructor.
+        --agent.logger my_pkg.writers:MyLogWriter
 
 .. rubric:: Resuming from a checkpoint
 

@@ -103,12 +103,8 @@ class RslRlBaseRunnerCfg:
   (e.g. ``2025-01-27_14-30-00_{run_name}``). Also becomes the
   display name for the run in wandb."""
   logger: str = "wandb"
-  """The logger to use. Either ``"wandb"``, ``"tensorboard"``, or the import path of
-  an ``rsl_rl.utils.LogWriter`` subclass (e.g. ``"my_pkg.writers:MyLogWriter"``).
-  Default is wandb."""
-  logger_kwargs: dict[str, str | int | float | bool] = field(default_factory=dict)
-  """Extra keyword arguments passed to the log writer's constructor. Ignored by the
-  tensorboard logger."""
+  """``"wandb"``, ``"tensorboard"``, or a ``LogWriter`` import path like
+  ``"my_pkg.writers:MyLogWriter"``."""
   wandb_project: str = "mjlab"
   """The wandb project name."""
   wandb_tags: Tuple[str, ...] = ()
@@ -128,6 +124,13 @@ class RslRlBaseRunnerCfg:
   upload_model: bool = True
   """Whether to upload model files (.pt, .onnx) to W&B on save. Set to
   False to keep metric logging but avoid storage usage. Default is True."""
+
+  def __post_init__(self) -> None:
+    if self.logger not in ("wandb", "tensorboard") and ":" not in self.logger:
+      raise ValueError(
+        f"Unknown logger {self.logger!r}. Expected 'wandb', 'tensorboard', or an "
+        "import path like 'my_pkg.writers:MyLogWriter'."
+      )
 
 
 @dataclass

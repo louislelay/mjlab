@@ -9,24 +9,13 @@ from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
 def resolve_logger_cfg(train_cfg: dict) -> str | dict:
-  """Convert mjlab's logger fields into the ``logger`` entry rsl-rl expects.
-
-  Args:
-    train_cfg: Runner config dict with ``logger`` and optional ``logger_kwargs``
-      and ``wandb_project`` entries.
-
-  Returns:
-    ``"tensorboard"``, or a dict with a ``class_name`` key and the writer's
-    constructor kwargs.
-  """
-  logger = train_cfg.get("logger", "tensorboard")
+  """Convert ``train_cfg["logger"]`` into the form rsl-rl expects."""
+  logger = train_cfg["logger"]
   if logger == "tensorboard":
     return logger
-  kwargs = train_cfg.get("logger_kwargs") or {}
   if logger == "wandb":
-    project = train_cfg.get("wandb_project")
-    return {"class_name": "WandbLogWriter", "project_name": project, **kwargs}
-  return {"class_name": logger, **kwargs}
+    return {"class_name": "WandbLogWriter", "project_name": train_cfg["wandb_project"]}
+  return {"class_name": logger}
 
 
 class MjlabOnPolicyRunner(OnPolicyRunner):
