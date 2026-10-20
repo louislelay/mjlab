@@ -64,6 +64,16 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     filename = f"{export_dir.name}.onnx"
     return export_dir, filename, export_dir / filename
 
+  def _get_run_name(self) -> str:
+    """Name of the run, taken from the log directory (``"local"`` if unset)."""
+    log_dir = self.logger.log_dir
+    return Path(log_dir).name if log_dir else "local"
+
+  def _upload_onnx(self, onnx_path: Path) -> None:
+    """Upload an exported ONNX policy through the log writer, if enabled."""
+    if self.cfg["upload_model"]:
+      self.logger.save_model(str(onnx_path), self.current_learning_iteration)
+
   def save(self, path: str, infos=None) -> None:
     """Save checkpoint.
 
