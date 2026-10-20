@@ -17,6 +17,9 @@ Added
   conditional nodes, which require CUDA 12.4 or newer.
 - ``RslRlBaseRunnerCfg.logger`` accepts the import path of an
   ``rsl_rl.utils.LogWriter`` subclass, e.g. ``"my_pkg.writers:MyLogWriter"``.
+- Added ``--checkpoint-source`` to ``train`` and ``play``, which accepts the import
+  path of a ``mjlab.utils.checkpoint_source.CheckpointSource`` to load checkpoints
+  from backends other than W&B.
 - Added ``RewardManager.term_rewards`` and ``RewardManager.get_term()`` for the
   per-term reward vector from the last step :issue:`1223`.
 
@@ -35,6 +38,8 @@ Changed
   VOLTAGE mode rejects ``voltage_limit`` and ``slew_rate``.
 - Task runners upload exported ONNX policies through the log writer instead of
   ``wandb.save``, and name the run in the ONNX metadata after the log directory.
+- Renamed ``--wandb-run-path`` and ``--wandb-checkpoint-name`` on ``train`` and
+  ``play`` to ``--checkpoint-run`` and ``--checkpoint-name``.
 - Bumped ``rsl-rl-lib`` from 5.5.0 to 5.5.1. This removes the need for capping
   ``wandb`` below 0.29.
 

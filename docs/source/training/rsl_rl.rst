@@ -268,6 +268,49 @@ To resume from a W&B run:
         --agent.resume True \
         --wandb-run-path your-entity/mjlab/run-id
 
+``--wandb-run-path`` is shorthand for ``--checkpoint-run`` with the default
+``--checkpoint-source wandb``. ``--checkpoint-name model_4000.pt`` picks a
+specific checkpoint instead of the latest. The same flags work with ``play``.
+
+.. rubric:: Loading checkpoints from another backend
+
+``--checkpoint-source`` also accepts ``local`` (``--checkpoint-run`` is then a
+run directory) or the import path of a subclass of
+``mjlab.utils.checkpoint_source.CheckpointSource``. A source is built as
+``cls(run, cache_root)`` and implements ``list_checkpoints`` and ``download``.
+It can also override ``label``, ``run_name``, ``run_url`` and ``run_status``,
+which the viewer's Checkpoints tab displays:
+
+.. code-block:: python
+
+    # my_pkg/sources.py
+    from pathlib import Path
+
+    from mjlab.utils.checkpoint_source import CheckpointInfo, CheckpointSource
+
+
+    class MyCheckpointSource(CheckpointSource):
+        label = "My backend"
+
+        def list_checkpoints(self) -> list[CheckpointInfo]:
+            return [CheckpointInfo(name, updated_at) for name, updated_at in ...]
+
+        def download(self, name: str) -> tuple[Path, bool]:
+            path = self.cache_root / "my_backend_checkpoints" / self.run / name
+            ...  # Download to path unless it already exists.
+            return path, was_cached
+
+.. code-block:: bash
+
+    uv run play Mjlab-Velocity-Flat-Unitree-G1 \
+        --checkpoint-source my_pkg.sources:MyCheckpointSource \
+        --checkpoint-run my-run-id
+
+Cache downloads under a directory of ``cache_root`` whose name ends with
+``_checkpoints``, so that local resume does not mistake it for a run. Tracking
+tasks still need ``--motion-file`` with non-W&B sources, because the motion is
+otherwise looked up among the W&B run's artifacts.
+
 
 Citation
 --------

@@ -2,9 +2,9 @@
 
 import os
 import sys
-import time as _time
+import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -16,27 +16,34 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_wandb_checkpoint_path
+from mjlab.utils.checkpoint_source import (
+  CheckpointSource,
+  LocalCheckpointSource,
+  make_checkpoint_source,
+)
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
+from mjlab.viewer.base import PolicyProtocol
 from mjlab.viewer.viser.viewer import CheckpointManager, format_time_ago
-
-
-def _parse_wandb_dt(value: str | datetime) -> datetime:
-  """Parse a W&B datetime string (or pass through a datetime object)."""
-  if isinstance(value, str):
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-  return value
 
 
 @dataclass(frozen=True)
 class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
   registry_name: str | None = None
+  checkpoint_source: str = "wandb"
+  """Backend ``checkpoint_run`` refers to: ``local``, ``wandb``, or the import path
+  of a ``mjlab.utils.checkpoint_source.CheckpointSource`` subclass."""
+  checkpoint_run: str | None = None
+  """Run to load checkpoints from (e.g. ``entity/project/run_id`` for W&B)."""
+  checkpoint_name: str | None = None
+  """Optional checkpoint name within the run (e.g. 'model_4000.pt'). Defaults to the
+  latest."""
   wandb_run_path: str | None = None
+  """Alias for ``checkpoint_run`` with the W&B source."""
   wandb_checkpoint_name: str | None = None
-  """Optional checkpoint name within the W&B run to load (e.g. 'model_4000.pt')."""
+  """Alias for ``checkpoint_name``."""
   checkpoint_file: str | None = None
   motion_file: str | None = None
   num_envs: int | None = None
@@ -56,6 +63,29 @@ class PlayConfig:
   _demo_mode: tyro.conf.Suppress[bool] = False
 
 
+def _make_checkpoint_manager(
+  source: CheckpointSource,
+  current_name: str,
+  load_policy: Callable[[str], PolicyProtocol],
+) -> CheckpointManager:
+  """Expose a checkpoint source to the viewer's Checkpoints tab."""
+
+  def fetch_available() -> list[tuple[str, str]]:
+    now = time.time()
+    checkpoints = sorted(source.list_checkpoints(), key=lambda c: c.step)
+    return [(c.name, format_time_ago(int(now - c.updated_at))) for c in checkpoints]
+
+  return CheckpointManager(
+    current_name=current_name,
+    fetch_available=fetch_available,
+    load_checkpoint=lambda name: load_policy(str(source.download(name)[0])),
+    run_name=source.run_name,
+    run_url=source.run_url,
+    run_status=source.run_status,
+    source_label=source.label,
+  )
+
+
 def run_play(task_id: str, cfg: PlayConfig):
   configure_torch_backends()
 
@@ -66,6 +96,8 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE
+  checkpoint_run = cfg.checkpoint_run or cfg.wandb_run_path
+  checkpoint_name = cfg.checkpoint_name or cfg.wandb_checkpoint_name
 
   # Disable terminations if requested (useful for viewing motions).
   if cfg.no_terminations:
@@ -112,25 +144,22 @@ def run_play(task_id: str, cfg: PlayConfig):
         print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
         motion_cmd.motion_file = cfg.motion_file
       else:
+        if checkpoint_run is None or cfg.checkpoint_source != "wandb":
+          raise ValueError(
+            "Tracking tasks require `motion_file` unless the checkpoint comes from "
+            "a W&B run (`wandb_run_path`), whose motion artifact is used instead."
+          )
         import wandb
 
-        api = wandb.Api()
-        if cfg.wandb_run_path is None and cfg.checkpoint_file is not None:
-          raise ValueError(
-            "Tracking tasks require `motion_file` when using `checkpoint_file`, "
-            "or provide `wandb_run_path` so the motion artifact can be resolved."
-          )
-        if cfg.wandb_run_path is not None:
-          wandb_run = api.run(str(cfg.wandb_run_path))
-          art = next(
-            (a for a in wandb_run.used_artifacts() if a.type == "motions"), None
-          )
-          if art is None:
-            raise RuntimeError("No motion artifact found in the run.")
-          motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
+        wandb_run = wandb.Api().run(checkpoint_run)
+        art = next((a for a in wandb_run.used_artifacts() if a.type == "motions"), None)
+        if art is None:
+          raise RuntimeError("No motion artifact found in the run.")
+        motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
 
   log_dir: Path | None = None
   resume_path: Path | None = None
+  source: CheckpointSource | None = None
   if TRAINED_MODE:
     log_root_path = (Path(cfg.log_root) / agent_cfg.experiment_name).resolve()
     if cfg.checkpoint_file is not None:
@@ -138,20 +167,21 @@ def run_play(task_id: str, cfg: PlayConfig):
       if not resume_path.exists():
         raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
       print(f"[INFO]: Loading checkpoint: {resume_path.name}")
+      source = LocalCheckpointSource(str(resume_path.parent), log_root_path)
     else:
-      if cfg.wandb_run_path is None:
+      if checkpoint_run is None:
         raise ValueError(
-          "`wandb_run_path` is required when `checkpoint_file` is not provided."
+          "`checkpoint_run` (or `wandb_run_path`) is required when "
+          "`checkpoint_file` is not provided."
         )
-      resume_path, was_cached = get_wandb_checkpoint_path(
-        log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name
+      source = make_checkpoint_source(
+        cfg.checkpoint_source, checkpoint_run, log_root_path
       )
-      # Extract run_id and checkpoint name from path for display.
-      run_id = resume_path.parent.name
-      checkpoint_name = resume_path.name
+      resume_path, was_cached = source.resolve(checkpoint_name)
       cached_str = "cached" if was_cached else "downloaded"
       print(
-        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
+        f"[INFO]: Loading checkpoint from {source.label}: {resume_path.name} "
+        f"(run: {checkpoint_run}, {cached_str})"
       )
     log_dir = resume_path.parent
 
@@ -209,7 +239,7 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   # Build checkpoint manager for hot-swapping checkpoints in the viewer.
   ckpt_manager: CheckpointManager | None = None
-  if TRAINED_MODE and resume_path is not None:
+  if TRAINED_MODE and resume_path is not None and source is not None:
     _ckpt_runner = runner  # pyright: ignore[reportPossiblyUnboundVariable]
 
     def _reload_policy(path: str):
@@ -221,63 +251,7 @@ def run_play(task_id: str, cfg: PlayConfig):
       )
       return _ckpt_runner.get_inference_policy(device=device)
 
-    if cfg.wandb_run_path is None:
-      ckpt_dir = resume_path.parent
-
-      def fetch_available_local() -> list[tuple[str, str]]:
-        now = _time.time()
-        entries: list[tuple[str, str, int]] = []
-        for f in sorted(ckpt_dir.glob("*.pt")):
-          try:
-            step = int(f.stem.split("_")[1])
-          except (IndexError, ValueError):
-            step = 0
-          ago = format_time_ago(int(now - f.stat().st_mtime))
-          entries.append((f.name, ago, step))
-        entries.sort(key=lambda x: x[2])
-        return [(name, t) for name, t, _ in entries]
-
-      ckpt_manager = CheckpointManager(
-        current_name=resume_path.name,
-        fetch_available=fetch_available_local,
-        load_checkpoint=lambda name: _reload_policy(str(ckpt_dir / name)),
-      )
-    else:
-      import wandb
-
-      api = wandb.Api()
-      run_path = str(cfg.wandb_run_path)
-      wandb_run = api.run(run_path)
-      _log_root = log_root_path  # pyright: ignore[reportPossiblyUnboundVariable]
-
-      def fetch_available_wandb() -> list[tuple[str, str]]:
-        wandb_run.load()
-        now = datetime.now(tz=timezone.utc)
-        entries: list[tuple[str, str, int]] = []
-        for f in wandb_run.files():
-          if not f.name.endswith(".pt"):
-            continue
-          try:
-            step = int(f.name.split("_")[1].split(".")[0])
-          except (IndexError, ValueError):
-            step = 0
-          ago = format_time_ago(
-            int((now - _parse_wandb_dt(f.updated_at)).total_seconds())
-          )
-          entries.append((f.name, ago, step))
-        entries.sort(key=lambda x: x[2])
-        return [(name, t) for name, t, _ in entries]
-
-      ckpt_manager = CheckpointManager(
-        current_name=resume_path.name,
-        fetch_available=fetch_available_wandb,
-        load_checkpoint=lambda name: _reload_policy(
-          str(get_wandb_checkpoint_path(_log_root, Path(run_path), name)[0])
-        ),
-        run_name=_parse_wandb_dt(wandb_run.created_at).strftime("%Y-%m-%d_%H-%M-%S"),
-        run_url=wandb_run.url,
-        run_status=wandb_run.state,
-      )
+    ckpt_manager = _make_checkpoint_manager(source, resume_path.name, _reload_policy)
 
   # Handle "auto" viewer selection.
   if cfg.viewer == "auto":
