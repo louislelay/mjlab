@@ -4,6 +4,8 @@ from typing import Dict
 
 import yaml
 
+from mjlab.utils.checkpoint_source import WandbCheckpointSource
+
 
 def dump_yaml(filename: Path, data: Dict, sort_keys: bool = False) -> None:
   """Saves data to a YAML file.
@@ -68,37 +70,4 @@ def get_wandb_checkpoint_path(
   Returns:
     Tuple of (checkpoint_path, was_cached)
   """
-  import wandb
-
-  # Extract run_id from path (e.g., "entity/project/run_id" -> "run_id").
-  run_id = str(run_path).split("/")[-1]
-  download_dir = log_path / "wandb_checkpoints" / run_id
-
-  # Query wandb API to find the latest checkpoint.
-  api = wandb.Api()
-  wandb_run = api.run(str(run_path))
-  files = [
-    file.name
-    for file in wandb_run.files(pattern="model_%.pt")
-    if re.match(r"^model_\d+\.pt$", file.name)
-  ]
-  if checkpoint_name is None:
-    checkpoint_file = max(files, key=lambda x: int(x.split("_")[1].split(".")[0]))
-  else:
-    if checkpoint_name not in files:
-      raise ValueError(
-        f"Checkpoint '{checkpoint_name}' not found in run {run_path}."
-        f" Available: {files}"
-      )
-    checkpoint_file = checkpoint_name
-
-  checkpoint_path = download_dir / checkpoint_file
-
-  # If this checkpoint is not cached locally, download it.
-  was_cached = checkpoint_path.exists()
-  if not was_cached:
-    download_dir.mkdir(parents=True, exist_ok=True)
-    wandb_file = wandb_run.file(str(checkpoint_file))
-    wandb_file.download(str(download_dir), replace=True)
-
-  return checkpoint_path, was_cached
+  return WandbCheckpointSource(str(run_path), log_path).resolve(checkpoint_name)

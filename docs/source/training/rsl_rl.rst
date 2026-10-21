@@ -118,7 +118,7 @@ Some commonly used top-level flags:
 
     # From W&B.
     uv run play Mjlab-Velocity-Flat-Unitree-G1 \
-        --wandb-run-path your-entity/mjlab/run-id
+        --checkpoint-run your-entity/mjlab/run-id
 
     # From a local checkpoint.
     uv run play Mjlab-Velocity-Flat-Unitree-G1 \
@@ -225,9 +225,21 @@ Training artifacts are written to:
             env.yaml              # full environment config
             agent.yaml            # full runner config
 
-Checkpoints are saved every ``save_interval`` iterations and uploaded to W&B
-as model artifacts by default. Set ``upload_model=False`` in the runner
-config to disable uploads while keeping metric logging.
+Checkpoints and exported ONNX policies are saved every ``save_interval``
+iterations and uploaded through the log writer's ``save_model`` (W&B by default).
+Set ``upload_model=False`` in the runner config to disable uploads while keeping
+metric logging.
+
+.. rubric:: Using a different logger
+
+``--agent.logger`` accepts ``wandb`` (the default), ``tensorboard``, or the
+import path of an ``rsl_rl.utils.LogWriter`` subclass, which is constructed with
+``log_dir`` only:
+
+.. code-block:: bash
+
+    uv run train Mjlab-Velocity-Flat-Unitree-G1 \
+        --agent.logger my_pkg.writers:MyLogWriter
 
 .. rubric:: Resuming from a checkpoint
 
@@ -254,7 +266,13 @@ To resume from a W&B run:
     uv run train Mjlab-Velocity-Flat-Unitree-G1 \
         --num-envs 4096 \
         --agent.resume True \
-        --wandb-run-path your-entity/mjlab/run-id
+        --checkpoint-run your-entity/mjlab/run-id
+
+``--checkpoint-name model_4000.pt`` picks a specific checkpoint instead of the
+latest. The same flags work with ``play``. To load from another backend, pass
+the import path of a ``mjlab.utils.checkpoint_source.CheckpointSource``
+subclass as ``--checkpoint-source my_pkg.sources:MySource``. Tracking tasks then
+need ``--motion-file``, since the motion is otherwise read from the W&B run.
 
 
 Citation

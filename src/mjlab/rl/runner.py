@@ -8,6 +8,16 @@ from rsl_rl.runners import OnPolicyRunner
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
+def resolve_logger_cfg(train_cfg: dict) -> str | dict:
+  """Convert ``train_cfg["logger"]`` into the form rsl-rl expects."""
+  logger = train_cfg["logger"]
+  if logger == "tensorboard":
+    return logger
+  if logger == "wandb":
+    return {"class_name": "WandbLogWriter", "project_name": train_cfg["wandb_project"]}
+  return {"class_name": logger}
+
+
 class MjlabOnPolicyRunner(OnPolicyRunner):
   """Base runner that persists environment state across checkpoints."""
 
@@ -29,6 +39,7 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
         if train_cfg[key].get("rnn_type") is None:
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
+    train_cfg["logger"] = resolve_logger_cfg(train_cfg)
     super().__init__(env, train_cfg, log_dir, device)
 
   def export_policy_to_onnx(
@@ -64,6 +75,16 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     filename = f"{export_dir.name}.onnx"
     return export_dir, filename, export_dir / filename
 
+  def _get_run_name(self) -> str:
+    """Name of the run, taken from the log directory (``"local"`` if unset)."""
+    log_dir = self.logger.log_dir
+    return Path(log_dir).name if log_dir else "local"
+
+  def _upload_model(self, path: str) -> None:
+    """Upload a model file through the log writer, unless ``upload_model`` is off."""
+    if self.cfg["upload_model"]:
+      self.logger.save_model(path, self.current_learning_iteration)
+
   def save(self, path: str, infos=None) -> None:
     """Save checkpoint.
 
@@ -77,8 +98,7 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     saved_dict["iter"] = self.current_learning_iteration
     saved_dict["infos"] = infos
     torch.save(saved_dict, path)
-    if self.cfg["upload_model"]:
-      self.logger.save_model(path, self.current_learning_iteration)
+    self._upload_model(path)
 
   def load(
     self,

@@ -5,6 +5,23 @@ Changelog
 Upcoming version (not yet released)
 -----------------------------------
 
+Added
+^^^^^
+
+- ``RslRlBaseRunnerCfg.logger`` accepts the import path of an
+  ``rsl_rl.utils.LogWriter`` subclass, e.g. ``"my_pkg.writers:MyLogWriter"``.
+- Added ``--checkpoint-source`` to ``train`` and ``play``, which accepts the import
+  path of a ``mjlab.utils.checkpoint_source.CheckpointSource`` to load checkpoints
+  from backends other than W&B.
+
+Changed
+^^^^^^^
+
+- Task runners upload exported ONNX policies through the log writer instead of
+  ``wandb.save``, and name the run in the ONNX metadata after the log directory.
+- Renamed ``--wandb-run-path`` and ``--wandb-checkpoint-name`` on ``train`` and
+  ``play`` to ``--checkpoint-run`` and ``--checkpoint-name``.
+
 Version 1.6.0 (August 8, 2026)
 ------------------------------
 

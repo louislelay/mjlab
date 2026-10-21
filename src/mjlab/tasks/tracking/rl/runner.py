@@ -4,6 +4,7 @@ from typing import cast
 import torch
 import wandb
 from rsl_rl.env.vec_env import VecEnv
+from rsl_rl.utils import WandbLogWriter
 from torch import nn
 
 from mjlab.rl import RslRlVecEnvWrapper
@@ -94,12 +95,7 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     policy_dir, filename, onnx_path = self._get_export_paths(path)
     try:
       self.export_policy_to_onnx(str(policy_dir), filename)
-      run_name: str = (
-        wandb.run.name
-        if self.logger.logger_type in ("wandb", "WandbLogWriter") and wandb.run
-        else "local"
-      )  # type: ignore[assignment]
-      metadata = get_base_metadata(self.env.unwrapped, run_name)
+      metadata = get_base_metadata(self.env.unwrapped, self._get_run_name())
       motion_term = cast(
         MotionCommand, self.env.unwrapped.command_manager.get_term("motion")
       )
@@ -110,13 +106,11 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
         }
       )
       attach_metadata_to_onnx(str(onnx_path), metadata)
-      if (
-        self.logger.logger_type in ("wandb", "WandbLogWriter")
-        and self.cfg["upload_model"]
-      ):
-        wandb.save(str(onnx_path), base_path=str(policy_dir))
-        if self.registry_name is not None:
-          wandb.run.use_artifact(self.registry_name)  # type: ignore
-          self.registry_name = None
+      self._upload_model(str(onnx_path))
+      # LogWriter has no hook for linking an input artifact, so this stays W&B-only.
+      is_wandb = isinstance(self.logger.writer, WandbLogWriter)
+      if is_wandb and self.cfg["upload_model"] and self.registry_name is not None:
+        wandb.run.use_artifact(self.registry_name)  # type: ignore
+        self.registry_name = None
     except Exception as e:
       print(f"[WARN] ONNX export failed (training continues): {e}")

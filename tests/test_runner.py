@@ -12,6 +12,8 @@ import pytest
 import torch
 from conftest import get_test_device
 from rsl_rl.models import MLPModel
+from rsl_rl.utils import WandbLogWriter
+from rsl_rl.utils.logger import Logger
 from tensordict import TensorDict
 
 import mjlab.scripts.train as train_mod
@@ -20,7 +22,7 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg, mdp
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.rl.runner import MjlabOnPolicyRunner
+from mjlab.rl.runner import MjlabOnPolicyRunner, resolve_logger_cfg
 from mjlab.rl.spatial_softmax import SpatialSoftmaxCNNModel
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
@@ -110,7 +112,6 @@ def test_runner_persists_common_step_counter(env, device, monkeypatch):
       wrapped_env, asdict(agent_cfg), log_dir=tmpdir, device=device
     )
     monkeypatch.setattr(runner.logger, "save_model", lambda *args, **kwargs: None)
-    runner.logger.logger_type = "tensorboard"  # Normally set in learn().
 
     wrapped_env.unwrapped.common_step_counter = 12345
     checkpoint_path = str(Path(tmpdir) / "test_checkpoint.pt")
@@ -525,57 +526,102 @@ def test_onnx_motion_model_clamps_out_of_bounds_time_step():
 
 
 @pytest.mark.parametrize(
+  ("logger", "expected"),
+  [
+    ("tensorboard", "tensorboard"),
+    ("wandb", {"class_name": "WandbLogWriter", "project_name": "mjlab"}),
+    ("my_pkg.writers:MyLogWriter", {"class_name": "my_pkg.writers:MyLogWriter"}),
+  ],
+)
+def test_resolve_logger_cfg(logger, expected):
+  cfg = asdict(RslRlOnPolicyRunnerCfg(logger=logger))
+  assert resolve_logger_cfg(cfg) == expected
+
+
+def test_runner_cfg_rejects_unknown_logger():
+  with pytest.raises(ValueError, match="Unknown logger"):
+    RslRlOnPolicyRunnerCfg(logger="wandbb")
+
+
+def _make_logger_mock(is_wandb: bool) -> MagicMock:
+  """Mock an rsl-rl Logger, specced off a real (cheap, inert) instance.
+
+  Speccing off an instance rather than the class keeps the instance attributes,
+  so an attribute rsl-rl renames or drops fails the test instead of silently
+  resolving to a truthy mock.
+  """
+  logger = Logger(
+    log_dir=None,
+    cfg={"algorithm": {"rnd_cfg": None}},
+    env_cfg={},
+    num_envs=1,
+    is_distributed=False,
+    gpu_world_size=1,
+    gpu_global_rank=0,
+    device="cpu",
+  )
+  mock = MagicMock(spec=logger)
+  mock.writer = MagicMock(spec=WandbLogWriter) if is_wandb else MagicMock()
+  return mock
+
+
+@pytest.mark.parametrize("upload_model", [True, False])
+@pytest.mark.parametrize(
   ("runner_module", "runner_class"),
   [
     ("mjlab.tasks.velocity.rl.runner", "VelocityOnPolicyRunner"),
     ("mjlab.tasks.manipulation.rl.runner", "ManipulationOnPolicyRunner"),
+    ("mjlab.tasks.tracking.rl.runner", "MotionTrackingOnPolicyRunner"),
   ],
 )
-@pytest.mark.parametrize("logger_type", ["wandb", "WandbLogWriter"])
-def test_task_runner_uploads_onnx_for_wandb_logger_types(
-  runner_module, runner_class, logger_type, monkeypatch, tmp_path
+def test_task_runner_uploads_onnx_through_logger(
+  runner_module, runner_class, upload_model, monkeypatch, tmp_path
 ):
-  """ONNX upload supports both legacy and current RSL-RL W&B logger names."""
+  """ONNX goes through Logger.save_model, named after the log directory."""
   import importlib
 
   runner_mod = importlib.import_module(runner_module)
   runner_cls = getattr(runner_mod, runner_class)
   runner = runner_cls.__new__(runner_cls)
-  runner.cfg = {"upload_model": True}
-  runner.logger = MagicMock()
-  runner.logger.logger_type = logger_type
+  runner.cfg = {"upload_model": upload_model}
+  runner.current_learning_iteration = 100
+  runner.registry_name = None
+  runner.logger = _make_logger_mock(is_wandb=False)
   runner.env = MagicMock()
   runner.export_policy_to_onnx = MagicMock()
-
-  monkeypatch.setattr(MjlabOnPolicyRunner, "save", lambda *a, **kw: None)
-  monkeypatch.setattr(runner_mod, "get_base_metadata", lambda *a: {})
-  monkeypatch.setattr(runner_mod, "attach_metadata_to_onnx", lambda *a: None)
 
   checkpoint = tmp_path / "run-dir" / "model_100.pt"
   checkpoint.parent.mkdir()
   checkpoint.touch()
   onnx_path = checkpoint.parent / f"{checkpoint.parent.name}.onnx"
+  runner.logger.log_dir = str(checkpoint.parent)
 
-  mock_run = MagicMock()
-  mock_run.name = "test-run"
-  with patch.object(runner_mod, "wandb") as mock_wandb:
-    mock_wandb.run = mock_run
-    runner.save(str(checkpoint))
-
-  mock_wandb.save.assert_called_once_with(
-    str(onnx_path), base_path=str(checkpoint.parent)
+  run_names = []
+  monkeypatch.setattr(MjlabOnPolicyRunner, "save", lambda *a, **kw: None)
+  monkeypatch.setattr(
+    runner_mod, "get_base_metadata", lambda env, name: run_names.append(name) or {}
   )
+  monkeypatch.setattr(runner_mod, "attach_metadata_to_onnx", lambda *a: None)
+
+  runner.save(str(checkpoint))
+
+  assert run_names == ["run-dir"]
+  if upload_model:
+    runner.logger.save_model.assert_called_once_with(str(onnx_path), 100)
+  else:
+    runner.logger.save_model.assert_not_called()
 
 
-def _make_tracking_runner_shell(registry_name, logger_type, upload_model=True):
+def _make_tracking_runner_shell(registry_name, is_wandb, upload_model=True):
   """Build a MotionTrackingOnPolicyRunner with all heavy parts mocked out."""
   from mjlab.tasks.tracking.rl.runner import MotionTrackingOnPolicyRunner
 
   runner = MotionTrackingOnPolicyRunner.__new__(MotionTrackingOnPolicyRunner)
   runner.registry_name = registry_name
   runner.cfg = {"upload_model": upload_model}
-  runner.logger = MagicMock()
-  runner.logger.logger_type = logger_type
+  runner.current_learning_iteration = 100
+  runner.logger = _make_logger_mock(is_wandb)
+  runner.logger.log_dir = None
 
   mock_motion_term = MagicMock()
   mock_motion_term.cfg.anchor_body_name = "pelvis"
@@ -585,20 +631,12 @@ def _make_tracking_runner_shell(registry_name, logger_type, upload_model=True):
   return runner
 
 
-@pytest.mark.parametrize("logger_type", ["wandb", "WandbLogWriter"])
-def test_tracking_runner_registers_artifact_for_wandb_logger_types(
-  logger_type, monkeypatch, tmp_path
-):
-  """use_artifact is called for both legacy 'wandb' and current 'WandbLogWriter' logger types.
-
-  Regression test: rsl-rl-lib 5.4 renamed the WandB logger type from 'wandb'
-  to 'WandbLogWriter'. If only 'wandb' is checked, use_artifact is silently
-  skipped and the nightly report fails with 'No motion artifact found in the run.'
-  """
+def test_tracking_runner_registers_artifact_for_wandb_logger(monkeypatch, tmp_path):
+  """use_artifact is called when the logger's writer is a WandbLogWriter."""
   from mjlab.rl.runner import MjlabOnPolicyRunner
   from mjlab.tasks.tracking.rl import runner as runner_mod
 
-  runner = _make_tracking_runner_shell("org/motions/motion:latest", logger_type)
+  runner = _make_tracking_runner_shell("org/motions/motion:latest", is_wandb=True)
 
   monkeypatch.setattr(MjlabOnPolicyRunner, "save", lambda *a, **kw: None)
   monkeypatch.setattr(runner_mod, "get_base_metadata", lambda *a: {})
@@ -632,7 +670,7 @@ def test_tracking_runner_does_not_register_artifact_for_tensorboard(
   from mjlab.rl.runner import MjlabOnPolicyRunner
   from mjlab.tasks.tracking.rl import runner as runner_mod
 
-  runner = _make_tracking_runner_shell("org/motions/motion:latest", "tensorboard")
+  runner = _make_tracking_runner_shell("org/motions/motion:latest", is_wandb=False)
 
   monkeypatch.setattr(MjlabOnPolicyRunner, "save", lambda *a, **kw: None)
   monkeypatch.setattr(runner_mod, "get_base_metadata", lambda *a: {})
