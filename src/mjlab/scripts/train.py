@@ -114,10 +114,6 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   if rank == 0:
     print(f"[INFO] Logging experiment in directory: {log_dir}")
 
-  env = ManagerBasedRlEnv(
-    cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
-  )
-
   log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
   resume_path: Path | None = None
@@ -138,6 +134,10 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
       resume_path = get_checkpoint_path(
         log_root_path, cfg.agent.load_run, cfg.agent.load_checkpoint
       )
+
+  env = ManagerBasedRlEnv(
+    cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
+  )
 
   # Only record videos on rank 0 to avoid multiple workers writing to the same files.
   if cfg.video and rank == 0:
