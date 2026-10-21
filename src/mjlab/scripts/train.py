@@ -12,7 +12,6 @@ import tyro
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import MjlabOnPolicyRunner, RslRlBaseRunnerCfg, RslRlVecEnvWrapper
-from mjlab.rl.runner import check_log_writer
 from mjlab.scripts._cli import maybe_print_top_level_help
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
@@ -68,7 +67,6 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   cfg.env.seed = seed
 
   print(f"[INFO] Training with: device={device}, seed={seed}, rank={rank}")
-  check_log_writer(cfg.agent.logger)
 
   registry_name: str | None = None
 

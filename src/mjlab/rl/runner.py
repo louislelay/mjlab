@@ -4,28 +4,8 @@ from pathlib import Path
 import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
-from rsl_rl.utils import LogWriter, resolve_callable
 
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
-
-
-def check_log_writer(logger: str) -> None:
-  """Check that ``logger`` is a built-in name or a ``LogWriter`` subclass."""
-  if logger in ("wandb", "tensorboard"):
-    return
-  writer_cls = resolve_callable(logger)
-  if not (isinstance(writer_cls, type) and issubclass(writer_cls, LogWriter)):
-    raise TypeError(f"{logger!r} is not an rsl_rl.utils.LogWriter subclass.")
-
-
-def resolve_logger_cfg(train_cfg: dict) -> str | dict:
-  """Convert ``train_cfg["logger"]`` into the form rsl-rl expects."""
-  logger = train_cfg["logger"]
-  if logger == "tensorboard":
-    return logger
-  if logger == "wandb":
-    return {"class_name": "WandbLogWriter", "project_name": train_cfg["wandb_project"]}
-  return {"class_name": logger}
 
 
 class MjlabOnPolicyRunner(OnPolicyRunner):
@@ -49,7 +29,14 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
         if train_cfg[key].get("rnn_type") is None:
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
-    train_cfg["logger"] = resolve_logger_cfg(train_cfg)
+    logger = train_cfg["logger"]
+    if logger == "wandb":
+      train_cfg["logger"] = {
+        "class_name": "WandbLogWriter",
+        "project_name": train_cfg["wandb_project"],
+      }
+    elif logger != "tensorboard":
+      train_cfg["logger"] = {"class_name": logger}
     super().__init__(env, train_cfg, log_dir, device)
 
   def export_policy_to_onnx(

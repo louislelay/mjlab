@@ -22,11 +22,7 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg, mdp
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.rl.runner import (
-  MjlabOnPolicyRunner,
-  check_log_writer,
-  resolve_logger_cfg,
-)
+from mjlab.rl.runner import MjlabOnPolicyRunner
 from mjlab.rl.spatial_softmax import SpatialSoftmaxCNNModel
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
@@ -537,22 +533,10 @@ def test_onnx_motion_model_clamps_out_of_bounds_time_step():
     ("my_pkg.writers:MyLogWriter", {"class_name": "my_pkg.writers:MyLogWriter"}),
   ],
 )
-def test_resolve_logger_cfg(logger, expected):
-  cfg = asdict(RslRlOnPolicyRunnerCfg(logger=logger))
-  assert resolve_logger_cfg(cfg) == expected
-
-
-@pytest.mark.parametrize(
-  ("logger", "error"),
-  [
-    ("wandbb", ValueError),
-    ("nonexistent_pkg.writers:Writer", ImportError),
-    ("pathlib:Path", TypeError),
-  ],
-)
-def test_check_log_writer_rejects_bad_logger(logger, error):
-  with pytest.raises(error):
-    check_log_writer(logger)
+def test_runner_converts_logger_cfg(env, device, logger, expected):
+  agent_cfg = asdict(RslRlOnPolicyRunnerCfg(logger=logger))
+  runner = MjlabOnPolicyRunner(RslRlVecEnvWrapper(env), agent_cfg, device=device)
+  assert runner.cfg["logger"] == expected
 
 
 def _make_logger_mock(is_wandb: bool) -> MagicMock:
