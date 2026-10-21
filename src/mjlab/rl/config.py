@@ -125,13 +125,6 @@ class RslRlBaseRunnerCfg:
   """Whether to upload model files (.pt, .onnx) to W&B on save. Set to
   False to keep metric logging but avoid storage usage. Default is True."""
 
-  def __post_init__(self) -> None:
-    if self.logger not in ("wandb", "tensorboard") and ":" not in self.logger:
-      raise ValueError(
-        f"Unknown logger {self.logger!r}. Expected 'wandb', 'tensorboard', or an "
-        "import path like 'my_pkg.writers:MyLogWriter'."
-      )
-
 
 @dataclass
 class RslRlOnPolicyRunnerCfg(RslRlBaseRunnerCfg):

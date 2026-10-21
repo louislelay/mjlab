@@ -542,16 +542,15 @@ def test_resolve_logger_cfg(logger, expected):
   assert resolve_logger_cfg(cfg) == expected
 
 
-def test_runner_cfg_rejects_unknown_logger():
-  with pytest.raises(ValueError, match="Unknown logger"):
-    RslRlOnPolicyRunnerCfg(logger="wandbb")
-
-
 @pytest.mark.parametrize(
   ("logger", "error"),
-  [("nonexistent_pkg.writers:Writer", ImportError), ("pathlib:Path", TypeError)],
+  [
+    ("wandbb", ValueError),
+    ("nonexistent_pkg.writers:Writer", ImportError),
+    ("pathlib:Path", TypeError),
+  ],
 )
-def test_check_log_writer_rejects_bad_import_path(logger, error):
+def test_check_log_writer_rejects_bad_logger(logger, error):
   with pytest.raises(error):
     check_log_writer(logger)
 
