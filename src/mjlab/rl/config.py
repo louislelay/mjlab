@@ -103,8 +103,7 @@ class RslRlBaseRunnerCfg:
   (e.g. ``2025-01-27_14-30-00_{run_name}``). Also becomes the
   display name for the run in wandb."""
   logger: str = "wandb"
-  """``"wandb"``, ``"tensorboard"``, or a ``LogWriter`` import path like
-  ``"my_pkg.writers:MyLogWriter"``."""
+  """The logger to use. Default is wandb."""
   wandb_project: str = "mjlab"
   """The wandb project name."""
   wandb_tags: Tuple[str, ...] = ()
