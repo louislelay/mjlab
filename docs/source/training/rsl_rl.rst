@@ -232,8 +232,7 @@ config to disable uploads while keeping metric logging.
 .. rubric:: Using a different logger
 
 ``--agent.logger`` accepts ``wandb`` (the default), ``tensorboard``, or the
-import path of an ``rsl_rl.utils.LogWriter`` subclass, which is constructed with
-``log_dir`` only:
+import path of an ``rsl_rl.utils.LogWriter`` subclass:
 
 .. code-block:: bash
 

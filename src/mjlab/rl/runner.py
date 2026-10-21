@@ -10,7 +10,7 @@ from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
 def check_log_writer(logger: str) -> None:
-  """Resolve a custom log writer up front, since rsl-rl only does so in ``learn()``."""
+  """Check that ``logger`` is a built-in name or a ``LogWriter`` subclass."""
   if logger in ("wandb", "tensorboard"):
     return
   writer_cls = resolve_callable(logger)

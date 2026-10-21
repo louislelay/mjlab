@@ -100,8 +100,8 @@ class RslRlBaseRunnerCfg:
   ``--log-root`` on the CLI."""
   run_name: str = ""
   """Optional label appended to the timestamped run directory
-  (e.g. ``2025-01-27_14-30-00_{run_name}``). Loggers that name runs after the
-  log directory, like W&B, show it as part of the run name."""
+  (e.g. ``2025-01-27_14-30-00_{run_name}``). Also becomes the
+  display name for the run in wandb."""
   logger: str = "wandb"
   """``"wandb"``, ``"tensorboard"``, or a ``LogWriter`` import path like
   ``"my_pkg.writers:MyLogWriter"``."""
