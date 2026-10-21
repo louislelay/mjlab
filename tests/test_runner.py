@@ -578,16 +578,14 @@ def test_task_runner_uploads_onnx_through_logger(
   onnx_path = checkpoint.parent / f"{checkpoint.parent.name}.onnx"
   runner.logger.log_dir = str(checkpoint.parent)
 
-  run_names = []
+  get_base_metadata = MagicMock(return_value={})
   monkeypatch.setattr(MjlabOnPolicyRunner, "save", lambda *a, **kw: None)
-  monkeypatch.setattr(
-    runner_mod, "get_base_metadata", lambda env, name: run_names.append(name) or {}
-  )
+  monkeypatch.setattr(runner_mod, "get_base_metadata", get_base_metadata)
   monkeypatch.setattr(runner_mod, "attach_metadata_to_onnx", lambda *a: None)
 
   runner.save(str(checkpoint))
 
-  assert run_names == ["run-dir"]
+  get_base_metadata.assert_called_once_with(runner.env.unwrapped, "run-dir")
   if upload_model:
     runner.logger.save_model.assert_called_once_with(str(onnx_path), 100)
   else:
