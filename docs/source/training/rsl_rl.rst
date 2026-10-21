@@ -229,16 +229,6 @@ Checkpoints are saved every ``save_interval`` iterations and uploaded to W&B
 as model artifacts by default. Set ``upload_model=False`` in the runner
 config to disable uploads while keeping metric logging.
 
-.. rubric:: Using a different logger
-
-``--agent.logger`` accepts ``wandb`` (the default), ``tensorboard``, or the
-import path of an ``rsl_rl.utils.LogWriter`` subclass:
-
-.. code-block:: bash
-
-    uv run train Mjlab-Velocity-Flat-Unitree-G1 \
-        --agent.logger my_pkg.writers:MyLogWriter
-
 .. rubric:: Resuming from a checkpoint
 
 .. code-block:: bash
