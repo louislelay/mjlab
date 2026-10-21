@@ -22,7 +22,11 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg, mdp
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.rl.runner import MjlabOnPolicyRunner, resolve_logger_cfg
+from mjlab.rl.runner import (
+  MjlabOnPolicyRunner,
+  check_log_writer,
+  resolve_logger_cfg,
+)
 from mjlab.rl.spatial_softmax import SpatialSoftmaxCNNModel
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
@@ -541,6 +545,15 @@ def test_resolve_logger_cfg(logger, expected):
 def test_runner_cfg_rejects_unknown_logger():
   with pytest.raises(ValueError, match="Unknown logger"):
     RslRlOnPolicyRunnerCfg(logger="wandbb")
+
+
+@pytest.mark.parametrize(
+  ("logger", "error"),
+  [("nonexistent_pkg.writers:Writer", ImportError), ("pathlib:Path", TypeError)],
+)
+def test_check_log_writer_rejects_bad_import_path(logger, error):
+  with pytest.raises(error):
+    check_log_writer(logger)
 
 
 def _make_logger_mock(is_wandb: bool) -> MagicMock:

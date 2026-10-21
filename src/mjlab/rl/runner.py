@@ -4,8 +4,18 @@ from pathlib import Path
 import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.utils import LogWriter, resolve_callable
 
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
+
+
+def check_log_writer(logger: str) -> None:
+  """Import a custom log writer path so that a bad one fails before training."""
+  if ":" not in logger:
+    return
+  writer_cls = resolve_callable(logger)
+  if not (isinstance(writer_cls, type) and issubclass(writer_cls, LogWriter)):
+    raise TypeError(f"{logger!r} is not an rsl_rl.utils.LogWriter subclass.")
 
 
 def resolve_logger_cfg(train_cfg: dict) -> str | dict:
