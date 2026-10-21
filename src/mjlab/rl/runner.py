@@ -65,12 +65,12 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     return export_dir, filename, export_dir / filename
 
   def _get_run_name(self) -> str:
-    """Name of the run, taken from the log directory (``"local"`` if unset)."""
+    """Run name, taken from the log directory."""
     log_dir = self.logger.log_dir
     return Path(log_dir).name if log_dir else "local"
 
   def _upload_model(self, path: str) -> None:
-    """Upload a model file through the log writer, unless ``upload_model`` is off."""
+    """Upload a model file through the log writer."""
     if self.cfg["upload_model"]:
       self.logger.save_model(path, self.current_learning_iteration)
 
