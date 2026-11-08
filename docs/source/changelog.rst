@@ -23,10 +23,16 @@ Added
   fields to the exported ONNX metadata by overriding it, and
   ``MjlabOnPolicyRunner.export_onnx_on_save`` to export ONNX on every checkpoint.
   The velocity, manipulation and tracking runners now share this export path.
+- ``train`` and ``play`` accept ``--checkpoint-source``, the import path of a
+  ``mjlab.utils.checkpoint_source.CheckpointSource`` subclass, to load checkpoints
+  from backends other than W&B.
 
 Changed
 ^^^^^^^
 
+- Renamed ``--wandb-run-path`` and ``--wandb-checkpoint-name`` on ``train`` and
+  ``play`` to ``--checkpoint-run`` and ``--checkpoint-name``. Removed
+  ``mjlab.utils.os.get_wandb_checkpoint_path``.
 - Heightfield terrains now lay hfield rows along y and columns along x, as MuJoCo
   expects. Non-square sub-terrains are no longer stretched with flat patches off the
   terrain; square ones are mirrored across x=y for a given seed.
@@ -49,6 +55,9 @@ Changed
 Fixed
 ^^^^^
 
+- Delayed position actuators now hold the post-reset joint positions until the
+  first action arrives, instead of driving toward 0 for their first ``lag``
+  physics steps after every reset. Targets set during the reset are kept.
 - ``posture`` and ``variable_posture`` now pair each joint with its own ``std`` when
   ``asset_cfg.preserve_order=True``.
 - ``apply_body_impulse`` now applies ``body_point_offset`` in the body frame, as
