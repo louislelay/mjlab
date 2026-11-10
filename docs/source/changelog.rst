@@ -27,6 +27,9 @@ Added
 Changed
 ^^^^^^^
 
+- Upgraded to MuJoCo and MuJoCo Warp 4.0. ``mujoco`` now installs the
+  ``mujoco-core`` and ``mujoco-studio`` packages; ``pip`` users upgrading an
+  existing environment should uninstall ``mujoco`` first.
 - Heightfield terrains now lay hfield rows along y and columns along x, as MuJoCo
   expects. Non-square sub-terrains are no longer stretched with flat patches off the
   terrain; square ones are mirrored across x=y for a given seed.
