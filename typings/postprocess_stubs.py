@@ -28,9 +28,10 @@ STUB_DIR = Path(__file__).parent / "mujoco"
 # platform / MUJOCO_GL setting.
 BACKENDS = ("cgl", "egl", "glfw", "glx", "osmesa")
 
-# Backend modules plus the rendering stubs that import them. None are needed to
-# type-check mjlab, and all are platform-specific, so remove them entirely.
-REMOVE = (*BACKENDS, "gl_context.pyi", "renderer.pyi", "rendering")
+# Backend modules plus the classic rendering stubs that import them. None are
+# needed to type-check mjlab, and all are platform-specific, so remove them
+# entirely. The Filament renderer stubs under rendering/filament are kept.
+REMOVE = (*BACKENDS, "gl_context.pyi", "renderer.pyi", "rendering/classic")
 
 # Backend imports in __init__.pyi, e.g. "from mujoco.cgl import GLContext" and
 # "from . import cgl", along with the names they contribute to __all__.

@@ -1,10 +1,14 @@
-"""MuJoCo offscreen renderer for headless visualization."""
+"""MuJoCo offscreen renderer for headless visualization, built on Filament."""
 
 import copy
+from collections.abc import Sequence
 from typing import Any, Callable
 
 import mujoco
+import mujoco.studio  # noqa: F401  Registers Filament material assets.
 import numpy as np
+from mujoco import mjrf
+from mujoco.rendering.filament import renderer as filament
 
 from mjlab.entity import Entity
 from mjlab.scene import Scene
@@ -52,6 +56,105 @@ def _get_camera_body_id(cfg: ViewerConfig, entities: dict[str, Entity]) -> int:
   return entity.indexing.bodies[body_ids[0]].id
 
 
+_OVERLAY_MAXGEOM = 10_000
+_SCENE = "scene"
+_TARGET = "rgb"
+
+
+class _FilamentScene:
+  """Filament context and scene that draw the rendered envs and overlays.
+
+  The primary env and each context env get their own ``ModelRenderables``,
+  all sharing one set of GPU resources. Context envs hide their sites and the
+  world-welded geoms (floor, terrain), so the static scene is drawn once. Debug
+  overlays are ``MjvGeom`` primitives drawn with a pool of renderables reused
+  across frames.
+  """
+
+  def __init__(
+    self, model: mujoco.MjModel, opt: mujoco.MjvOption, pixels: np.ndarray
+  ) -> None:
+    self._model = model
+    self._ctx = mjrf.Context(mjrf.ContextConfig())
+    self._renderer = filament.Renderer(self._ctx)
+    self._scene = self._renderer.scene(_SCENE)
+    self._scene.configure_from_model(model)
+    self._renderer.target(_TARGET, pixels)
+    self._resources = mjrf.ModelResources(self._ctx, model)
+    self._lights = mjrf.ModelLights(self._scene, self._resources)
+    self._world = self._new_renderables(opt)
+    self._context_opt = copy.copy(opt)
+    self._context_opt.sitegroup[:] = 0
+    self._context_envs: list[mjrf.ModelRenderables] = []
+    self._static_geoms = np.flatnonzero(model.body_weldid[model.geom_bodyid] == 0)
+    q = model.vis.quality
+    self._geom_resolution = (q.numstacks, q.numslices, q.numquads)
+    self._overlays: list[mjrf.Renderable] = []
+    self._overlay_types: list[int] = []
+    self._num_shown_overlays = 0
+
+  def update_world(self, data: mujoco.MjData) -> None:
+    """Pose the lights and the primary env's geoms from ``data``."""
+    self._lights.update(data)
+    self._world.update(data)
+
+  def update_context_env(self, slot: int, data: mujoco.MjData) -> None:
+    """Pose the dynamic geoms of context env number ``slot`` from ``data``."""
+    while slot >= len(self._context_envs):
+      renderables = self._new_renderables(self._context_opt)
+      for geom_id in self._static_geoms:
+        renderable = renderables.get_renderable(mujoco.mjtObj.mjOBJ_GEOM, int(geom_id))
+        if renderable is not None:
+          self._scene.remove_renderable(renderable)
+      self._context_envs.append(renderables)
+    self._context_envs[slot].update(data)
+
+  def draw_overlays(self, geoms: Sequence[mujoco.MjvGeom]) -> None:
+    """Show ``geoms`` this frame and hide overlays left from the last one."""
+    for i, geom in enumerate(geoms):
+      renderable = self._overlay(i, geom.type)
+      renderable.set_pose(geom.pos, geom.mat.ravel())
+      renderable.set_size(geom.size)
+      # Decor materials are left out of floor reflections, which otherwise
+      # draw ghost copies of the overlays near the horizon.
+      renderable.set_material(mjrf.Material(color=geom.rgba, decor=True))
+      if i >= self._num_shown_overlays:
+        self._scene.add_renderable(renderable)
+    for renderable in self._overlays[len(geoms) : self._num_shown_overlays]:
+      self._scene.remove_renderable(renderable)
+    self._num_shown_overlays = len(geoms)
+
+  def render(
+    self, camera: mujoco.MjvGLCamera, shadows: bool, reflections: bool
+  ) -> None:
+    """Render the scene from ``camera`` into the pixel buffer."""
+    view = filament.View(
+      scene=_SCENE,
+      target=_TARGET,
+      camera=camera,
+      shadows=shadows,
+      reflections=reflections,
+    )
+    self._renderer.render([view])
+
+  def _new_renderables(self, opt: mujoco.MjvOption) -> mjrf.ModelRenderables:
+    renderables = mjrf.ModelRenderables(self._scene, self._resources)
+    renderables.set_options(opt)
+    return renderables
+
+  def _overlay(self, index: int, geom_type: int) -> mjrf.Renderable:
+    """Return pooled overlay ``index``, meshed as ``geom_type``."""
+    if index == len(self._overlays):
+      params = mjrf.RenderableParams(cast_shadow=False)
+      self._overlays.append(self._ctx.create_renderable(params))
+      self._overlay_types.append(-1)
+    renderable = self._overlays[index]
+    if self._overlay_types[index] != geom_type:
+      renderable.set_geom_mesh(mujoco.mjtGeom(geom_type), *self._geom_resolution)
+      self._overlay_types[index] = geom_type
+    return renderable
+
+
 class OffscreenRenderer:
   def __init__(
     self,
@@ -78,8 +181,6 @@ class OffscreenRenderer:
     # is not dominated by the full multi-env world bounds.
     self._model.stat.extent = self._compute_render_extent(cfg.distance)
 
-    self._model.vis.global_.offheight = cfg.height
-    self._model.vis.global_.offwidth = cfg.width
     if cfg.fovy is not None:
       self._model.vis.global_.fovy = cfg.fovy
 
@@ -91,28 +192,21 @@ class OffscreenRenderer:
     self._cam = self._setup_camera(cfg, self._model, scene.entities)
     self._env_ids: tuple[int, ...] | None = None
 
-    self._renderer: mujoco.Renderer | None = None
     self._opt = mujoco.MjvOption()
     self._opt.geomgroup[:] = np.array(cfg.geom_group, dtype=np.uint8)
     self._opt.sitegroup[:] = np.array(cfg.site_group, dtype=np.uint8)
-    self._pert = mujoco.MjvPerturb()
-    self._catmask = mujoco.mjtCatBit.mjCAT_DYNAMIC
-
-  @property
-  def renderer(self) -> mujoco.Renderer:
-    if self._renderer is None:
-      raise ValueError("Renderer not initialized. Call 'initialize()' first.")
-
-    return self._renderer
+    # Holds the debug overlays and the camera matrices; Filament draws the
+    # model itself.
+    self._overlay = mujoco.MjvScene(self._model, maxgeom=_OVERLAY_MAXGEOM)
+    self._pixels = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
+    self._filament: _FilamentScene | None = None
 
   def initialize(self) -> None:
-    if self._renderer is not None:
+    if self._filament is not None:
       raise RuntimeError(
         "Renderer is already initialized. Call 'close()' first to reinitialize."
       )
-    self._renderer = mujoco.Renderer(
-      model=self._model, height=self._cfg.height, width=self._cfg.width
-    )
+    self._filament = _FilamentScene(self._model, self._opt, self._pixels)
 
   def update(
     self,
@@ -121,7 +215,7 @@ class OffscreenRenderer:
     camera: str | None = None,
   ) -> None:
     """Update renderer with simulation data."""
-    if self._renderer is None:
+    if self._filament is None:
       raise ValueError("Renderer not initialized. Call 'initialize()' first.")
 
     if int(data.nworld) <= 0:
@@ -137,39 +231,47 @@ class OffscreenRenderer:
     self._sync_model_fields(primary_env)
     self._sync_data_fields(data, primary_env)
 
-    cam = camera if camera is not None else self._cam
-    self._renderer.update_scene(self._data, camera=cam, scene_option=self._opt)
+    cam = self._cam if camera is None else self._named_camera(camera)
+    mujoco.mjv_updateCamera(self._model, self._data, cam, self._overlay)
+    self._filament.update_world(self._data)
 
-    # Note: update_scene() resets the scene each frame, so no need to manually clear.
+    self._overlay.ngeom = 0
     if debug_vis_callback is not None:
       visualizer = MujocoNativeDebugVisualizer(
-        self._renderer.scene, self._model, env_idx=primary_env
+        self._overlay, self._model, env_idx=primary_env
       )
       debug_vis_callback(visualizer)
+    self._filament.draw_overlays(self._overlay.geoms[: self._overlay.ngeom])
 
-    # Add neighboring environments as geoms for context.
-    for env_id in self._env_ids[1:]:
+    # Add neighboring environments for context.
+    for slot, env_id in enumerate(self._env_ids[1:]):
       self._sync_model_fields(env_id)
       self._sync_data_fields(data, env_id)
-      mujoco.mjv_addGeoms(
-        self._model,
-        self._data,
-        self._opt,
-        self._pert,
-        self._catmask.value,
-        self._renderer.scene,
-      )
+      self._filament.update_context_env(slot, self._data)
 
   def render(self) -> np.ndarray:
-    if self._renderer is None:
+    if self._filament is None:
       raise ValueError("Renderer not initialized. Call 'initialize()' first.")
 
-    return self._renderer.render()
+    self._filament.render(
+      self._overlay.camera[0],
+      shadows=self._cfg.enable_shadows,
+      reflections=self._cfg.enable_reflections,
+    )
+    return self._pixels.copy()
 
   def close(self) -> None:
-    if self._renderer is not None:
-      self._renderer.close()
-      self._renderer = None
+    self._filament = None
+
+  def _named_camera(self, name: str) -> mujoco.MjvCamera:
+    """Return a fixed camera looking through the model camera ``name``."""
+    cam_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+    if cam_id == -1:
+      raise ValueError(f"Camera '{name}' not found in model.")
+    camera = mujoco.MjvCamera()
+    camera.type = mujoco.mjtCamera.mjCAMERA_FIXED.value
+    camera.fixedcamid = cam_id
+    return camera
 
   def _sync_data_fields(self, data: Any, env_idx: int) -> None:
     """Copy one env's state into the host MjData and refresh kinematics."""

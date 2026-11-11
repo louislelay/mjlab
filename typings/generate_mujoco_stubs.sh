@@ -22,7 +22,8 @@ STUBGEN=(uv run --no-sync --with "pybind11-stubgen==${STUBGEN_VERSION}" pybind11
 echo "Generating MuJoCo type stubs..."
 "${STUBGEN[@]}" mujoco -o "$SCRIPT_DIR" --ignore-all-errors
 
-# The MuJoCo Studio modules used by mjlab's native viewer. Studio loads its
+# The MuJoCo Studio modules used by the native viewer, and the Filament
+# renderer (shipped with Studio) used by the offscreen renderer. Studio loads its
 # windowing and rendering libraries on import, which may fail on a headless
 # machine; skip it in that case rather than failing, keeping the committed stubs.
 #
@@ -30,11 +31,16 @@ echo "Generating MuJoCo type stubs..."
 # modules are stubbed from source with mypy's stubgen, which (unlike
 # pybind11-stubgen) records instance attributes assigned in __init__.
 STUDIO_EXTENSION_MODULES=(
+  mujoco._render_filament
   mujoco.studio.dear_imgui.dear_imgui
   mujoco.studio.implot.implot
   mujoco.studio.ux
 )
 STUDIO_PYTHON_MODULES=(
+  mujoco.mjrf
+  mujoco.rendering
+  mujoco.rendering.filament
+  mujoco.rendering.filament.renderer
   mujoco.studio
   mujoco.studio.app
   mujoco.studio.app.inputs
