@@ -129,8 +129,8 @@ explicitly (``"web"`` for the browser, ``""`` for a desktop window).
    * - ``<`` / ``>``
      - Cycle through environments (when ``num_envs > 1``).
    * - ``A``
-     - Toggle rendering all environments simultaneously. Debug
-       visualization draws for all environments when this is active.
+     - Toggle debug visualization for all environments. Only the
+       selected environment's bodies are drawn.
    * - ``P``
      - Toggle reward plots.
    * - ``R``

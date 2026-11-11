@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import mujoco
+import numpy as np
 from mujoco.studio.dear_imgui import dear_imgui as imgui
 
 from mjlab.viewer.base import ViewerAction
 from mjlab.viewer.native import keys
-from mjlab.viewer.native.studio import KEY_CODES, KeyEvent, MjlabSimPlugin
+from mjlab.viewer.native.studio import (
+  KEY_CODES,
+  KeyEvent,
+  MjlabSimPlugin,
+  drawable_overlays,
+)
 from mjlab.viewer.native.viewer import NativeMujocoViewer
 
 
@@ -63,6 +70,30 @@ def test_key_codes_dispatch_viewer_requests():
   actions = [a for a, _ in v._actions]
   assert actions == [ViewerAction.TOGGLE_PLOTS, ViewerAction.TOGGLE_PAUSE]
   assert user_keys == [keys.KEY_P, keys.KEY_SPACE]
+
+
+def test_drawable_overlays_drops_asset_geoms():
+  scn = mujoco.MjvScene(mujoco.MjModel.from_xml_string("<mujoco/>"), maxgeom=3)
+  for geom, geom_type in zip(
+    scn.geoms,
+    (
+      mujoco.mjtGeom.mjGEOM_SPHERE,
+      mujoco.mjtGeom.mjGEOM_MESH,
+      mujoco.mjtGeom.mjGEOM_ARROW,
+    ),
+    strict=True,
+  ):
+    geom.type = geom_type
+  scn.ngeom = 3
+
+  kept = drawable_overlays(scn.geoms[: scn.ngeom])
+
+  assert [g.type for g in kept] == [
+    mujoco.mjtGeom.mjGEOM_SPHERE,
+    mujoco.mjtGeom.mjGEOM_ARROW,
+  ]
+  kept[0].rgba[:] = 0.5
+  assert not np.allclose(scn.geoms[0].rgba, 0.5)
 
 
 def test_sim_plugin_queues_keys_until_popped():

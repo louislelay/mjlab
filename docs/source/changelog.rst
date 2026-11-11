@@ -34,7 +34,9 @@ Changed
   ``mujoco.viewer`` GLFW viewer. On macOS it serves Studio's web viewer in the
   browser, so ``mjpython`` is no longer needed; pass ``gfx`` to
   ``NativeMujocoViewer`` to pick a mode. Reward plots draw in an ImPlot window,
-  and ``PlotCfg`` is reduced to ``history`` and ``max_plots``.
+  and ``PlotCfg`` is reduced to ``history`` and ``max_plots``. Neighboring
+  environments are no longer drawn, since Studio cannot draw mesh overlays;
+  debug visualization for all environments (``A``) still works.
 - Heightfield terrains now lay hfield rows along y and columns along x, as MuJoCo
   expects. Non-square sub-terrains are no longer stretched with flat patches off the
   terrain; square ones are mirrored across x=y for a given seed.

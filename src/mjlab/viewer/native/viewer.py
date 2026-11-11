@@ -21,9 +21,10 @@ The per frame sync has four steps:
    with a :class:`~mjlab.viewer.native.studio.FrameSnapshot` carrying overlay
    geoms, randomized model fields, the status text and reward plots.
 
-For multi environment scenes, steps 1 and 2 are repeated for neighboring
-environments into a secondary ``MjData`` (``self.vd``), and their geoms are
-added to the snapshot with ``mjv_addGeoms``.
+Only the selected environment's bodies are shown. Studio draws overlays from
+``MjvGeom`` primitives and cannot draw mesh geoms there, so neighboring
+environments (mostly meshes) are not added; debug visualization can still be
+drawn for all environments.
 
 External force channels
 -----------------------
@@ -90,6 +91,7 @@ from mjlab.viewer.native.studio import (
   RewardPlot,
   ViewerSettings,
   default_gfx,
+  drawable_overlays,
 )
 from mjlab.viewer.native.visualizer import MujocoNativeDebugVisualizer
 
@@ -182,10 +184,8 @@ class NativeMujocoViewer(BaseViewer):
     self.mjm: Optional[mujoco.MjModel] = None
     self.mjd: Optional[mujoco.MjData] = None
     self.handle: Optional[viewer_handle.ViewerHandle] = None
-    self.vd: Optional[mujoco.MjData] = None
     self.vopt: Optional[mujoco.MjvOption] = None
     self.scn: Optional[mujoco.MjvScene] = None
-    self.catmask: int = mujoco.mjtCatBit.mjCAT_DYNAMIC.value
     self._sim_plugin = MjlabSimPlugin()
     self._camera = mujoco.MjvCamera()
 
@@ -208,8 +208,6 @@ class NativeMujocoViewer(BaseViewer):
     if self.cfg.fovy is not None:
       self.mjm.vis.global_.fovy = self.cfg.fovy
 
-    if self.env.unwrapped.num_envs > 1:
-      self.vd = mujoco.MjData(self.mjm)
     self.vopt = mujoco.MjvOption()
     self.scn = mujoco.MjvScene(self.mjm, maxgeom=_MAX_OVERLAY_GEOMS)
 
@@ -317,8 +315,7 @@ class NativeMujocoViewer(BaseViewer):
       )
       self.env.unwrapped.update_visualizers(visualizer)
     self._add_env_selection_marker(scn)
-    self._add_other_env_geoms(scn, sim, sim_data)
-    return tuple(copy.copy(scn.geoms[i]) for i in range(scn.ngeom))
+    return drawable_overlays(scn.geoms[: scn.ngeom])
 
   def _add_env_selection_marker(self, scn: mujoco.MjvScene) -> None:
     """Draw a downward arrow above the selected environment."""
@@ -362,29 +359,6 @@ class NativeMujocoViewer(BaseViewer):
       target_data.mocap_pos[:] = sim_data.mocap_pos[env_idx].cpu().numpy()
       target_data.mocap_quat[:] = sim_data.mocap_quat[env_idx].cpu().numpy()
     target_data.xfrc_applied[:] = sim_data.xfrc_applied[env_idx].cpu().numpy()
-
-  def _add_other_env_geoms(
-    self,
-    scn: mujoco.MjvScene,
-    sim: _SimProtocol,
-    sim_data: _SimDataProtocol,
-  ) -> None:
-    """Add the geoms of non-selected environments to the overlay scene."""
-    if self.vd is None:
-      return
-    assert self.mjm is not None and self.vopt is not None
-
-    pert = mujoco.MjvPerturb()
-    for i in range(self.env.unwrapped.num_envs):
-      if i == self.env_idx:
-        continue
-      self._sync_env_state_to_mjdata(self.vd, sim_data, i)
-      self._sync_model_fields(sim, i)
-      mujoco.mj_forward(self.mjm, self.vd)
-      mujoco.mjv_addGeoms(self.mjm, self.vd, self.vopt, pert, self.catmask, scn)
-
-    # Restore main env's model fields.
-    self._sync_model_fields(sim, self.env_idx)
 
   def _sync_model_fields(self, sim: _SimProtocol, env_idx: int) -> None:
     """Sync visually-relevant DR'd model fields from GPU to MjModel."""

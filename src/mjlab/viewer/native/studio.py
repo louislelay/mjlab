@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import sys
+from collections.abc import Sequence
 
 import mujoco
 import numpy as np
@@ -277,6 +278,30 @@ class MjlabSimPlugin(plugin.SimPlugin):
     """Return and clear the key presses received since the last call."""
     pressed, self.keys = self.keys, []
     return pressed
+
+
+_UNDRAWABLE_OVERLAY_TYPES = frozenset(
+  int(t)
+  for t in (
+    mujoco.mjtGeom.mjGEOM_HFIELD,
+    mujoco.mjtGeom.mjGEOM_MESH,
+    mujoco.mjtGeom.mjGEOM_SDF,
+    mujoco.mjtGeom.mjGEOM_SKIN,
+  )
+)
+
+
+def drawable_overlays(
+  geoms: Sequence[mujoco.MjvGeom],
+) -> tuple[mujoco.MjvGeom, ...]:
+  """Copy the geoms Studio can draw as ``extra_geoms``.
+
+  Studio's desktop renderer aborts on geom types that need model assets
+  (meshes, height fields, SDFs, skins), so those are dropped.
+  """
+  return tuple(
+    copy.copy(geom) for geom in geoms if geom.type not in _UNDRAWABLE_OVERLAY_TYPES
+  )
 
 
 def default_gfx() -> str:
