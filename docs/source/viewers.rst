@@ -246,7 +246,8 @@ Offscreen renderer
 ------------------
 
 For recording videos without a display, ``OffscreenRenderer`` renders
-frames using MuJoCo's offscreen rendering pipeline. It supports the
+frames with MuJoCo's Filament renderer, the same renderer MuJoCo
+Studio uses. It supports the
 same ``ViewerConfig`` camera configuration and accepts a debug
 visualization callback. The renderer is hard-capped at 32 environments
 to keep memory and rendering time manageable.

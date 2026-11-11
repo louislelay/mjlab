@@ -37,6 +37,10 @@ Changed
   and ``PlotCfg`` is reduced to ``history`` and ``max_plots``. Neighboring
   environments are no longer drawn, since Studio cannot draw mesh overlays;
   debug visualization for all environments (``A``) still works.
+- ``OffscreenRenderer`` (video recording, ``csv_to_npz``) now renders with
+  MuJoCo's Filament renderer instead of classic OpenGL. Debug overlays no
+  longer cast shadows, and the ``OffscreenRenderer.renderer`` property is
+  removed.
 - Heightfield terrains now lay hfield rows along y and columns along x, as MuJoCo
   expects. Non-square sub-terrains are no longer stretched with flat patches off the
   terrain; square ones are mirrored across x=y for a given seed.
