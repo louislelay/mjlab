@@ -65,16 +65,16 @@ class _FilamentScene:
   """Filament context and scene that draw the rendered envs and overlays.
 
   The primary env and each context env get their own ``ModelRenderables``,
-  all sharing one set of GPU resources. Context envs hide the world-welded
-  geoms (floor, terrain) so the static scene is drawn once. Debug overlays are
-  ``MjvGeom`` primitives drawn with a pool of renderables reused across frames.
+  all sharing one set of GPU resources. Context envs hide their sites and the
+  world-welded geoms (floor, terrain), so the static scene is drawn once. Debug
+  overlays are ``MjvGeom`` primitives drawn with a pool of renderables reused
+  across frames.
   """
 
   def __init__(
     self, model: mujoco.MjModel, opt: mujoco.MjvOption, pixels: np.ndarray
   ) -> None:
     self._model = model
-    self._opt = opt
     self._ctx = mjrf.Context(mjrf.ContextConfig())
     self._renderer = filament.Renderer(self._ctx)
     self._scene = self._renderer.scene(_SCENE)
@@ -82,7 +82,9 @@ class _FilamentScene:
     self._renderer.target(_TARGET, pixels)
     self._resources = mjrf.ModelResources(self._ctx, model)
     self._lights = mjrf.ModelLights(self._scene, self._resources)
-    self._world = self._new_renderables()
+    self._world = self._new_renderables(opt)
+    self._context_opt = copy.copy(opt)
+    self._context_opt.sitegroup[:] = 0
     self._context_envs: list[mjrf.ModelRenderables] = []
     self._static_geoms = np.flatnonzero(model.body_weldid[model.geom_bodyid] == 0)
     q = model.vis.quality
@@ -99,7 +101,7 @@ class _FilamentScene:
   def update_context_env(self, slot: int, data: mujoco.MjData) -> None:
     """Pose the dynamic geoms of context env number ``slot`` from ``data``."""
     while slot >= len(self._context_envs):
-      renderables = self._new_renderables()
+      renderables = self._new_renderables(self._context_opt)
       for geom_id in self._static_geoms:
         renderable = renderables.get_renderable(mujoco.mjtObj.mjOBJ_GEOM, int(geom_id))
         if renderable is not None:
@@ -113,7 +115,9 @@ class _FilamentScene:
       renderable = self._overlay(i, geom.type)
       renderable.set_pose(geom.pos, geom.mat.ravel())
       renderable.set_size(geom.size)
-      renderable.set_material(mjrf.Material(color=geom.rgba))
+      # Decor materials are left out of floor reflections, which otherwise
+      # draw ghost copies of the overlays near the horizon.
+      renderable.set_material(mjrf.Material(color=geom.rgba, decor=True))
       if i >= self._num_shown_overlays:
         self._scene.add_renderable(renderable)
     for renderable in self._overlays[len(geoms) : self._num_shown_overlays]:
@@ -133,9 +137,9 @@ class _FilamentScene:
     )
     self._renderer.render([view])
 
-  def _new_renderables(self) -> mjrf.ModelRenderables:
+  def _new_renderables(self, opt: mujoco.MjvOption) -> mjrf.ModelRenderables:
     renderables = mjrf.ModelRenderables(self._scene, self._resources)
-    renderables.set_options(self._opt)
+    renderables.set_options(opt)
     return renderables
 
   def _overlay(self, index: int, geom_type: int) -> mjrf.Renderable:
