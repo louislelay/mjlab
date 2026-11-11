@@ -1,8 +1,7 @@
 """Raycast sensor demo.
 
 Run with:
-  uv run mjpython scripts/demos/raycast_sensor.py [--viewer native|viser]  # macOS
-  uv run python scripts/demos/raycast_sensor.py [--viewer native|viser]    # Linux
+  uv run python scripts/demos/raycast_sensor.py [--viewer native|viser]
 
 Examples:
   # Grid pattern (default)
@@ -15,7 +14,7 @@ Examples:
   uv run python scripts/demos/raycast_sensor.py --alignment yaw
 
 If using the native viewer, you can launch in interactive mode with:
-  uv run mjpython scripts/demos/raycast_sensor.py --viewer native --interactive
+  uv run python scripts/demos/raycast_sensor.py --viewer native --interactive
 """
 
 from __future__ import annotations

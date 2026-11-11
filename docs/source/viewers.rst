@@ -4,9 +4,8 @@ Viewers
 =======
 
 mjlab ships two interactive viewers for evaluating trained policies and
-debugging environment behavior: a **native viewer** built on MuJoCo's
-`passive viewer <https://mujoco.readthedocs.io/en/stable/python.html#passive-viewer>`_
-that opens a desktop window, and a `Viser <https://viser.studio/main/>`_ **viewer** that runs in the
+debugging environment behavior: a **native viewer** built on
+MuJoCo Studio that opens a desktop window, and a `Viser <https://viser.studio/main/>`_ **viewer** that runs in the
 browser. Both share a common ``ViewerConfig`` and execute the same
 simulation loop; they differ in interface, feature set, and where they
 shine.
@@ -18,7 +17,7 @@ The ``play`` script accepts a ``--viewer`` flag:
 
 .. code-block:: bash
 
-    # Desktop window (MuJoCo native viewer).
+    # Desktop window (MuJoCo Studio; a browser tab on macOS).
     uv run play Mjlab-Velocity-Flat-Unitree-G1 --viewer native \
         --wandb-run-path your-entity/your-project/run_id
 
@@ -103,14 +102,15 @@ Native MuJoCo viewer
    :align: center
    :alt: Native MuJoCo viewer with reward plots
 
-The native viewer opens MuJoCo's
-`passive viewer <https://mujoco.readthedocs.io/en/stable/python.html#passive-viewer>`_
-in a desktop window. It provides the fastest, most faithful rendering
-with full MuJoCo visual fidelity. Choose this viewer for local
-iteration and interactive perturbation testing. The
-MuJoCo team has a
-`video tutorial <https://www.youtube.com/watch?v=P83tKA1iz2Y>`_
-covering the viewer's built-in controls and navigation.
+The native viewer runs MuJoCo Studio in a desktop window. It provides
+the most faithful rendering with full MuJoCo visual fidelity. Choose
+this viewer for local iteration and interactive perturbation testing.
+
+On macOS, Studio cannot open a desktop window from Python, so the
+native viewer serves Studio's web viewer at ``localhost:8080`` and
+opens it in the browser instead; plain ``python`` works, ``mjpython``
+is not needed. Pass ``gfx`` to ``NativeMujocoViewer`` to choose a mode
+explicitly (``"web"`` for the browser, ``""`` for a desktop window).
 
 **Keyboard controls.**
 
@@ -129,17 +129,16 @@ covering the viewer's built-in controls and navigation.
    * - ``<`` / ``>``
      - Cycle through environments (when ``num_envs > 1``).
    * - ``A``
-     - Toggle rendering all environments simultaneously. Debug
-       visualization draws for all environments when this is active.
+     - Toggle debug visualization for all environments. Only the
+       selected environment's bodies are drawn.
    * - ``P``
      - Toggle reward plots.
    * - ``R``
      - Toggle debug visualization.
 
 **Reward plots.**
-Press ``P`` to display per-term reward curves in a strip along the right
-edge of the window. Each term gets its own plot with an autoscaling
-y-axis. The plots update live and clear on environment reset. This is
+Press ``P`` to open a window with per-term reward curves, one
+autoscaling line per term. The plots update live and clear on environment reset. This is
 the fastest way to diagnose which reward terms dominate or misbehave
 during a rollout.
 

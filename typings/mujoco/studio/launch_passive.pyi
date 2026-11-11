@@ -1,0 +1,6 @@
+import mujoco
+from collections.abc import Iterable
+from mujoco.studio import messages as messages, plugin as plugin, viewer_handle as viewer_handle, viewer_protocol as viewer_protocol
+
+def launch(config: viewer_protocol.ViewerConfig, *, plugins: Iterable[plugin.Plugin] | None = None) -> viewer_handle.ViewerHandle: ...
+def run(config: viewer_protocol.ViewerConfig, *, model: mujoco.MjModel | None = None, data: mujoco.MjData | None = None, model_path: str | None = None, plugins: Iterable[plugin.Plugin] | None = None) -> None: ...
