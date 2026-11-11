@@ -50,6 +50,15 @@ def _suspend_gc():
       gc.enable()
 
 
+_SET_CONST_ARGS: dict[RecomputeLevel, tuple[int, bool]] = {
+  RecomputeLevel.set_const_fixed: (mjwarp.SetConstGroup.FIXED, False),
+  RecomputeLevel.set_const_0: (
+    mjwarp.SetConstGroup.KIN0 | mjwarp.SetConstGroup.INERT0,
+    True,
+  ),
+  RecomputeLevel.set_const: (mjwarp.SetConstGroup.ALL, True),
+}
+
 _JACOBIAN_MAP = {
   "auto": mujoco.mjtJacobian.mjJAC_AUTO,
   "dense": mujoco.mjtJacobian.mjJAC_DENSE,
@@ -485,9 +494,9 @@ class Simulation:
         qpos0/body_inertia/dof_armature changes, and ``set_const_fixed``
         is the cheapest (covers body_gravcomp changes).
     """
-    fn = getattr(mjwarp, level.name)
+    groups, restore = _SET_CONST_ARGS[level]
     with wp.ScopedDevice(self.wp_device):
-      fn(self._wp_model, self._wp_data)
+      mjwarp.set_const(self._wp_model, self._wp_data, groups=groups, restore=restore)
 
   def forward(self) -> None:
     with wp.ScopedDevice(self.wp_device):
