@@ -289,10 +289,9 @@ for a in G1_ARTICULATION.actuators:
 
 
 if __name__ == "__main__":
-  import mujoco.viewer as viewer
-
   from mjlab.entity.entity import Entity
+  from mjlab.viewer.native.studio import view_model
 
   robot = Entity(get_g1_robot_cfg())
 
-  viewer.launch(robot.spec.compile())
+  view_model(robot.spec.compile())

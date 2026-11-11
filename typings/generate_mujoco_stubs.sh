@@ -22,10 +22,39 @@ STUBGEN=(uv run --no-sync --with "pybind11-stubgen==${STUBGEN_VERSION}" pybind11
 echo "Generating MuJoCo type stubs..."
 "${STUBGEN[@]}" mujoco -o "$SCRIPT_DIR" --ignore-all-errors
 
-# mujoco.viewer pulls in GLFW, which may not import on a headless machine.
-# Skip it in that case rather than failing; the committed viewer stub is kept.
-if ! "${STUBGEN[@]}" mujoco.viewer -o "$SCRIPT_DIR" --ignore-all-errors; then
-  echo "Warning: could not generate mujoco.viewer stubs (no GLFW?). Skipping."
+# The MuJoCo Studio modules used by mjlab's native viewer. Studio loads its
+# windowing and rendering libraries on import, which may fail on a headless
+# machine; skip it in that case rather than failing, keeping the committed stubs.
+#
+# Compiled extension modules are stubbed with pybind11-stubgen. The pure-Python
+# modules are stubbed from source with mypy's stubgen, which (unlike
+# pybind11-stubgen) records instance attributes assigned in __init__.
+STUDIO_EXTENSION_MODULES=(
+  mujoco.studio.dear_imgui.dear_imgui
+  mujoco.studio.implot.implot
+  mujoco.studio.ux
+)
+STUDIO_PYTHON_MODULES=(
+  mujoco.studio
+  mujoco.studio.app
+  mujoco.studio.app.inputs
+  mujoco.studio.app.plugins
+  mujoco.studio.launch_passive
+  mujoco.studio.messages
+  mujoco.studio.plugin
+  mujoco.studio.viewer_handle
+  mujoco.studio.viewer_protocol
+)
+MYPY_VERSION="1.18.2"
+MYPY_STUBGEN=(uv run --no-sync --with "mypy==${MYPY_VERSION}" stubgen)
+
+if uv run --no-sync python -c "import mujoco.studio.ux"; then
+  for module in "${STUDIO_EXTENSION_MODULES[@]}"; do
+    "${STUBGEN[@]}" "$module" -o "$SCRIPT_DIR" --ignore-all-errors
+  done
+  "${MYPY_STUBGEN[@]}" "${STUDIO_PYTHON_MODULES[@]/#/-m}" -o "$SCRIPT_DIR"
+else
+  echo "Warning: could not import mujoco.studio. Skipping its stubs."
 fi
 
 echo "Post-processing stubs to make them platform-independent..."

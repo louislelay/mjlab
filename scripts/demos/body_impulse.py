@@ -6,8 +6,7 @@ and Viser viewers render the arrows via ``apply_body_impulse``'s built-in
 debug visualization.
 
 Run with:
-  uv run mjpython scripts/demos/body_impulse.py                      # macOS
-  uv run python scripts/demos/body_impulse.py                        # Linux
+  uv run python scripts/demos/body_impulse.py                        # Native
   uv run python scripts/demos/body_impulse.py --viewer viser         # Viser
 """
 
