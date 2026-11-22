@@ -27,6 +27,12 @@ Added
   The velocity, manipulation and tracking runners now share this export path.
 - The Unitree G1 model limits ankle roll and pitch jointly, with fixed tendons that
   model the coupled mechanical stops of the push-rod ankle.
+- Added ``mdp.motion_anchor_ori_b_from_sensor``, a tracking observation that reads the
+  robot orientation from a ``framequat`` IMU sensor on the anchor body instead of the
+  anchor body pose. A deployed policy can then take the raw IMU orientation, and
+  ``dr.site_quat`` on the IMU site reaches the observation. With an unrotated site it
+  equals ``mdp.motion_anchor_ori_b``. The G1 ships a ``torso_imu_quat`` sensor for
+  this.
 
 Changed
 ^^^^^^^
