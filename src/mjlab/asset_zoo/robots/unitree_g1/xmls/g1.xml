@@ -337,6 +337,7 @@
     <velocimeter name="imu_lin_vel" site="imu_in_pelvis"/>
     <accelerometer name="imu_lin_acc" site="imu_in_pelvis"/>
     <framezaxis name="imu_upvector" objtype="body" objname="world" reftype="site" refname="imu_in_pelvis"/>
+    <framequat name="torso_imu_quat" objtype="site" objname="imu_in_torso"/>
     <subtreeangmom name="root_angmom" body="pelvis"/>
   </sensor>
 </mujoco>
